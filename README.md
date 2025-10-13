@@ -1,4 +1,4 @@
-# AppGraph AI 
+# AppLens
 
 > **Intelligent Microservice Debugging & Analysis**  
 > Automatically understand, visualize, and debug complex microservice architectures using AI-powered graph analysis.
