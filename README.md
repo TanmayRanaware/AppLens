@@ -1,152 +1,91 @@
-# 1) Change-Point-First RCA Agent for Microservices
+# AppGraph AI 🧠
 
-Modern microservice systems generate **anomaly storms**: one real fault triggers dozens of alerts across downstream services. Teams spend precious minutes chasing **symptoms** instead of the **first cause**, inflating **Mean Time to Recover** and burning **error budgets**.  
-**This project** is an always-on, vendor-agnostic **AI observability agent** that detects the **earliest change** in system behavior, maps how it **propagates** through services, and delivers an **evidence-backed explanation** and **fix suggestions** — in real time.
-
----
-
-## 🚩 Problem We’re Solving
-
-- **Slow root-cause analysis (RCA)** in large microservice graphs.  
-- **Alert fatigue** (duplication, flapping, symptom noise) hides the true origin.  
-- **Static or opaque topologies** make it hard to see how faults spread after a deploy, schema migration, or feature-flag change.
-
-**Consequence:** Engineers lose time pivoting between metrics, logs, and traces; incidents last longer than they should.
+> **Intelligent Microservice Debugging & Analysis**  
+> Automatically understand, visualize, and debug complex microservice architectures using AI-powered graph analysis.
 
 ---
 
-## ✅ How We Solve It (High Level)
+## 🔴 The Problem
 
-### 1) Change-Point-First Detection
-The agent continuously watches **golden KPIs** (latency, errors, saturation) and flags **where the first statistically significant shift occurred**.
+Modern microservice architectures are incredibly complex and debugging them is painful:
 
-### 2) Live Causal/Service Graph
-From **distributed traces** and **change events** (deploys/flags/migrations), it maintains a live **“who-calls-whom”** graph with current dependencies.
+- **Finding the source of an error** across dozens of services is like finding a needle in a haystack
+- **Understanding downstream impacts** when something breaks requires tribal knowledge and manual investigation
+- **Answering "what if I change this?"** means hours of manual code archaeology across multiple repositories
+- **Service dependencies** are scattered across repos, configs, documentation, and team knowledge
+- **Root cause analysis** often involves jumping between logs, code, and team members
 
-### 3) Propagation Reasoning
-It verifies that **downstream services** show issues **after** the first change, constructing a **cause → symptom** path.
-
-### 4) Explainable Incident Card (Real Time)
-Posts **one card** (Slack/PagerDuty) with:
-- **Ranked suspects + confidence**
-- **Timestamps**
-- **Affected endpoints / SLO burn**
-- **Related logs/traces**
-- **What changed**
-- **Recommended first fixes** (e.g., rollback last migration)
-
-### 5) On-Demand Investigations
-You can ask:  
-> “analyze checkout timeouts last 30m”  
-…and the agent reproduces the same **evidence-backed RCA**.
+When a production error occurs, teams waste hours or even days trying to:
+1. Figure out which microservice actually caused the problem
+2. Understand which other services are affected
+3. Identify what changed recently that could have caused it
+4. Assess the blast radius before attempting a fix
 
 ---
 
-## 🧪 Example
+## ✅ What We're Solving
 
-```
+AppGraph AI creates an **intelligent graph memory of your entire microservice ecosystem** that AI agents can reason over. 
 
-10:06  inventory-db  write latency spikes   (earliest change)
-10:07  inventory-svc slows
-10:08  cart-api      times out
-10:09  checkout      fails
+Instead of manual detective work, you get:
 
-```
+- **Instant service dependency mapping** from your GitHub repositories
+- **AI-powered error analysis** that pinpoints the source microservice from error logs
+- **Visual impact analysis** showing exactly which services are affected
+- **Natural language Q&A** about your architecture and "what-if" scenarios
+- **Context-aware debugging** that correlates errors with recent code changes
 
-**Agent card:**  
-> *Earliest change at **inventory-db (10:06)** → propagated to **inventory-svc → cart-api → checkout**. Likely tied to migration **idx-2025-09-29**. Try **rollback** / **rebuild index**.*
-
----
-
-## 📦 Project Goals (for this repo)
-
-- Implement continuous **change-point detection** on golden KPIs.  
-- Build and refresh a **live service graph** from traces + change events.  
-- Correlate **earliest change** with **downstream symptoms** to propose a **propagation path**.  
-- Emit an **explainable incident card** with evidence and suggested first actions.  
-- Provide **Chat** entry points for **on-demand** investigations.
-
-> This README describes the project concept and goals. See the `/docs` and `/examples` folders (to be added) for setup, datasets, and demos.
+Think of it as giving your entire microservice architecture a brain that understands how everything connects and can explain what's happening when things go wrong.
 
 ---
 
-## 🛠️ High-Level Architecture (Planned)
+## ✨ Features
 
-```
+### 🕸️ **Automatic Service Graph Construction**
+- **Upload GitHub repo links** (single repos or entire organizations)
+- **Automatic analysis** detects HTTP/gRPC calls, message queues, API contracts, and database dependencies
+- **Unified dependency graph** built across all your microservices
+- **Interactive visualization** showing how every service connects
 
-[OTel Metrics/Logs/Traces]  [Change Events: deploys/flags/migrations]
-\                    /
-\                  /
-[Ingest & Normalize]  <-------------------------------
-|                                         |
-[Service Graph Builder]  ←——— traces ————→  (keeps live map)
-|
-[Change-Point Detector]  (online, golden KPIs)
-|
-[Propagation & RCA Ranking]
-|
-[Incident Card Generator]
-|
-Slack / PagerDuty / Webhook API
+### 🚨 **Intelligent Error Analysis**
+- **Paste any error log or stack trace** into the chat
+- **AI parses and understands** the error in the context of your service graph
+- **Pinpoints the source microservice** with confidence reasoning
+- **Highlights all affected services** (upstream and downstream impact)
+- **Correlates with recent changes** to show what might have caused it
 
-```
+### 🎨 **Interactive Service Graph**
+- **Real-time visualization** of your entire microservice architecture
+- **Visual impact highlighting** when errors occur
+- **Click to explore** endpoints, dependencies, and recent code changes
+- **Filter and navigate** by service, protocol type, or recency
 
----
+### 🤔 **Natural Language Q&A**
+Ask anything about your architecture:
+- *"Which services call the payment API?"*
+- *"If I change the `/inventory/stock` endpoint, what will break?"*
+- *"Show me all services that depend on the auth database"*
+- *"What changed in checkout-service in the last week?"*
+- *"What's the path from user-service to notification-service?"*
 
-## 📈 Why This Approach
+The AI understands your service graph and answers with precise information and visual highlights.
 
-Most tools group alerts or rely on static maps, which can elevate the **loudest symptom**.  
-This agent **leads with time** (the **first** change) and validates a **propagation path** over a **live** dependency graph — producing faster, more trustworthy localization.
+### 🔍 **Context-Aware Root Cause Analysis**
+When you paste an error, you get:
+- **Likely origin service** identified from error patterns
+- **Impact cascade visualization** of all affected services
+- **Recent code changes** that might be related
+- **Evidence reasoning** explaining how the conclusion was reached
+- **Suggested next steps** for investigation and remediation
 
----
-
-
-
-# 2)  OrgNexus : Expert Matching for Organizations
-
-An AI-powered expert matching system that connects you with the right professionals **inside** your company. MatchMeWith builds a **knowledge graph** and rich **people profiles** by leveraging data from docs, code, tickets, and org systems—so you can find true match in seconds.
-
----
-
-## 🚀 What is this project?
-MatchMeWith discovers, ranks, and introduces internal experts for a given topic, tech, domain, or system. It understands **skills**, **projects**, **ownership**, and **context** (teams, services, regions), then routes your request to the best-fit people.
-
----
-
-## 🧩 The problem
-- Org charts and job titles **don’t reflect real skills** or current work.
-- Finding help is slow and noisy; people get **interrupted** repeatedly; **duplicate work** happens.
+### 📊 **What-If Analysis**
+- Understand the impact before making changes
+- See which services depend on specific endpoints or resources
+- Identify circular dependencies and architectural issues
+- Assess deployment risks across service boundaries
 
 ---
 
-## 🤖 How the AI agent solves it
-1. **Ingests signals** from company structure (titles/teams)/Git (repos/PRs)/tickets (Jira)/wikis(Confluence/Notion)/calendars (availability windows).
-2. **Extracts skills & domains** using NLP (entity/skill mining, topic modeling) and links them to people/projects.
-3. **Builds a knowledge graph** of *people ↔ skills ↔ projects ↔ systems* and a vector index for semantic search.
-4. **Matches & ranks experts** by evidence (recent commits, tickets closed, docs authored), **context fit** (team/product), **availability**, and **responsiveness**.
-5. **Introduces with context**: sends a brief to you and the expert (why they’re a match, top links, recent work) and collects feedback to improve future rankings.
-
----
-
-## 🏗️ High-Level Architecture
-
-```
-
-```
-    [company structure]   [Jira]   [Git]   [Docs/Wiki]   [Incidents]   [Calendars]
-         \      |       |         |             |              /
-                          [Ingest & ETL + PII Redaction]
-                                       |
-                       [Skill/Entity Extraction + Linking]
-                                       |
-                       [Knowledge Graph  + Vector Index]
-                                       |
-                       [Matching & Ranking Service (API)]
-                                       |
-                [AI Agent Orchestrator (Chat/Tool Use/RAG)]
-                                       |
-             Slack / Teams Bot • Web UI • Email/Calendar Invites
-
----
-
-
+<div align="center">
+  <p><strong>Built for developers who've debugged one too many microservice incidents</strong></p>
+</div>
