@@ -39,7 +39,8 @@ async def get_graph(
             repo_ids_from_scan = [r for r in targets_result.scalars().all()]
             
             if repo_ids_from_scan:
-                service_query = service_query.where(Service.scan_id == scan_id)
+                # Filter services by repo_ids (services don't have scan_id directly)
+                service_query = service_query.where(Service.repo_id.in_(repo_ids_from_scan))
             else:
                 # No targets in scan, return empty graph
                 return {"nodes": [], "links": []}
@@ -58,8 +59,18 @@ async def get_graph(
         # Build query for interactions
         interaction_query = select(Interaction)
         if scan_id:
-            # Filter interactions by scan_id
-            interaction_query = interaction_query.where(Interaction.scan_id == scan_id)
+            # Filter interactions by services from this scan
+            service_ids = [s.id for s in services]
+            if service_ids:
+                interaction_query = interaction_query.where(
+                    and_(
+                        Interaction.source_service_id.in_(service_ids),
+                        Interaction.target_service_id.in_(service_ids),
+                    )
+                )
+            else:
+                # No services for this scan, return empty graph
+                return {"nodes": [], "links": []}
         elif repos:
             service_ids = [s.id for s in services]
             if service_ids:
