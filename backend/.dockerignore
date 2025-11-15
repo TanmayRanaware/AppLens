@@ -1,27 +1,8 @@
-# Python
+venv
 __pycache__
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-ENV/
-.venv
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# IDE
-.vscode/
-.idea/
-
-# Environment
+*.pyc
+.git
+.gitignore
+Dockerfile
+.DS_Store
 .env
-.env.local
-
-# Alembic
-alembic/versions/*.pyc
-
