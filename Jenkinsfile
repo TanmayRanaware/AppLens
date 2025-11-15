@@ -60,8 +60,8 @@ pipeline {
   }
 
   post {
-    success { echo "✅ Deployed ${TAG} to EC2" }
-    failure { echo "❌ Pipeline failed" }
+    success { echo "Deployed ${TAG} to EC2" }
+    failure { echo "Pipeline FAILED" }
   }
 }
 
