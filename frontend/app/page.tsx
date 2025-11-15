@@ -71,9 +71,6 @@ export default function LandingPage() {
           <h1 className="text-6xl font-bold text-white mb-4">
             App<span className="text-primary-400">Lens</span>
           </h1>
-          <p className="text-xl text-gray-300 max-w-2xl mx-auto">
-            Discover and visualize your microservice architecture.
-          </p>
         </div>
 
         <div className="space-y-6 pt-8">
