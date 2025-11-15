@@ -1,6 +1,32 @@
 import axios from 'axios'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// Automatically detect API URL based on environment
+export function getApiUrl(): string {
+  // If explicitly set via environment variable (useful for local dev), use it
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL
+  }
+  
+  // In browser, detect from current location
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname
+    const protocol = window.location.protocol
+    
+    // If running on localhost, use localhost API
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:8000'
+    }
+    
+    // In production, use absolute URL with /api path (proxied through Caddy)
+    // This works because Caddy routes /api/* to the backend
+    return `${protocol}//${hostname}/api`
+  }
+  
+  // Default fallback for server-side rendering
+  return 'http://localhost:8000'
+}
+
+const API_URL = getApiUrl()
 
 export const api = axios.create({
   baseURL: API_URL,

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Github } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, getApiUrl } from '@/lib/api'
 
 export default function LandingPage() {
   const router = useRouter()
@@ -45,7 +45,8 @@ export default function LandingPage() {
   }, [router])
 
   const handleGitHubLogin = () => {
-    window.location.href = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/auth/github/login`
+    // Use the same API URL detection logic used by all API calls
+    window.location.href = `${getApiUrl()}/auth/github/login`
   }
 
   const handleSwitchAccount = () => {
