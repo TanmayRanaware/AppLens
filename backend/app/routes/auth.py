@@ -21,7 +21,7 @@ async def github_login():
     # Users need to revoke authorization or use incognito mode to switch accounts
     params = {
         "client_id": settings.github_client_id,
-        "redirect_uri": settings.github_oauth_redirect_uri,
+        "redirect_uri": settings.github_oauth_redirect_uri_computed,
         "scope": "read:user repo",
         "state": state,
     }

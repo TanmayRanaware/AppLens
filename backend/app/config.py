@@ -12,7 +12,22 @@ class Settings(BaseSettings):
     # GitHub OAuth
     github_client_id: str
     github_client_secret: str
-    github_oauth_redirect_uri: str = "http://localhost:8000/auth/github/callback"
+    github_oauth_redirect_uri: Optional[str] = None
+    
+    @property
+    def github_oauth_redirect_uri_computed(self) -> str:
+        """Get GitHub OAuth redirect URI, constructing from FRONTEND_URL if not explicitly set"""
+        if self.github_oauth_redirect_uri:
+            return self.github_oauth_redirect_uri
+        
+        # Auto-construct from frontend URL based on environment
+        if self.environment == "production":
+            # In production, backend is behind proxy at /api, so callback is /api/auth/github/callback
+            base_url = self.frontend_url.rstrip('/')
+            return f"{base_url}/api/auth/github/callback"
+        else:
+            # Local development
+            return "http://localhost:8000/auth/github/callback"
     
     # JWT
     jwt_secret: str = "change-me-in-production"

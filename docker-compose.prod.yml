@@ -36,6 +36,7 @@ services:
       MCP_GITHUB_PORT: ${MCP_GITHUB_PORT:-8000}
       ENVIRONMENT: production
       FRONTEND_URL: https://${DOMAIN}
+      # GITHUB_OAUTH_REDIRECT_URI will be auto-computed from FRONTEND_URL if not set
     expose:
       - "8000"
     healthcheck:
