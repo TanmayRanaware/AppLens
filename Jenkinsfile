@@ -77,12 +77,13 @@ pipeline {
               set -eux
               ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
                 set -eux
-                # Login to Docker Hub on the EC2 host (in case pulls need auth)
-                echo "${DOCKERHUB_PASS:-}" | docker login -u "${DOCKERHUB_USER}" --password-stdin docker.io || true
+
+                # Login to Docker Hub on EC2 (Jenkins substitutes the secrets here; Jenkins will mask them in logs)
+                echo '${DOCKERHUB_PASS}' | docker login -u '${DOCKERHUB_USER}' --password-stdin docker.io || true
 
                 cd /srv/app
 
-                # persist the tag used by docker-compose (if your compose references it)
+                # Persist the tag used by docker-compose (if your compose references it)
                 if grep -q "^TAG=" .env.prod; then
                   sed -i "s/^TAG=.*/TAG=${TAG}/" .env.prod
                 else
