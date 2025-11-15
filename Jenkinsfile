@@ -54,13 +54,42 @@ pipeline {
             docker buildx create --use || true
             docker buildx inspect --bootstrap
 
-            docker buildx build --platform linux/amd64 \
-              -t ${FRONTEND_IMAGE}:${TAG} -t ${FRONTEND_IMAGE}:latest \
-              -f frontend/Dockerfile frontend --push
+            # Function to retry buildx build with push
+            retry_build_push() {
+              local image=$1
+              local tag=$2
+              local dockerfile=$3
+              local context=$4
+              local max_attempts=3
+              local attempt=1
+              local delay=5
+              
+              while [ $attempt -le $max_attempts ]; do
+                echo "Attempt $attempt/$max_attempts: Building and pushing ${image}:${tag}"
+                if docker buildx build --platform linux/amd64 \
+                  -t ${image}:${tag} -t ${image}:latest \
+                  -f ${dockerfile} ${context} --push; then
+                  echo "Successfully built and pushed ${image}:${tag}"
+                  return 0
+                else
+                  if [ $attempt -lt $max_attempts ]; then
+                    echo "Build/push failed, retrying in ${delay}s..."
+                    sleep $delay
+                    delay=$((delay * 2))  # Exponential backoff: 5s, 10s, 20s
+                  fi
+                  attempt=$((attempt + 1))
+                fi
+              done
+              echo "Failed to build/push ${image}:${tag} after $max_attempts attempts"
+              return 1
+            }
 
-            docker buildx build --platform linux/amd64 \
-              -t ${BACKEND_IMAGE}:${TAG} -t ${BACKEND_IMAGE}:latest \
-              -f backend/Dockerfile backend --push
+            # Build and push with retry logic
+            echo "Building and pushing frontend image..."
+            retry_build_push ${FRONTEND_IMAGE} ${TAG} frontend/Dockerfile frontend
+
+            echo "Building and pushing backend image..."
+            retry_build_push ${BACKEND_IMAGE} ${TAG} backend/Dockerfile backend
           '''
         }
       }
