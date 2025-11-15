@@ -61,6 +61,7 @@ Think of it as giving your entire microservice architecture a brain that underst
 - **Filter and navigate** by service, protocol type, or recency
 
 ### 🤔 **Natural Language Q&A**
+
 Ask anything about your architecture:
 - *"Which services call the payment API?"*
 - *"If I change the `/inventory/stock` endpoint, what will break?"*
@@ -71,6 +72,7 @@ Ask anything about your architecture:
 The AI understands your service graph and answers with precise information and visual highlights.
 
 ### 🔍 **Context-Aware Root Cause Analysis**
+
 When you paste an error, you get:
 - **Likely origin service** identified from error patterns
 - **Impact cascade visualization** of all affected services

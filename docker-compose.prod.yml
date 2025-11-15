@@ -1,0 +1,71 @@
+version: "3.9"
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: app-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /srv/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: tanmayranaware/applens-backend:${TAG:-latest}
+    container_name: app-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_URL: postgresql+asyncpg://appuser:${POSTGRES_PASSWORD}@db:5432/appdb
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      JWT_SECRET: ${JWT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MCP_GITHUB_HOST: ${MCP_GITHUB_HOST:-localhost}
+      MCP_GITHUB_PORT: ${MCP_GITHUB_PORT:-8000}
+      ENVIRONMENT: production
+      FRONTEND_URL: https://${DOMAIN}
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  frontend:
+    image: tanmayranaware/applens-frontend:${TAG:-latest}
+    container_name: app-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: https://${DOMAIN}/api
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      NODE_ENV: production
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+
+  proxy:
+    image: caddy:alpine
+    container_name: app-proxy
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - frontend
+      - backend

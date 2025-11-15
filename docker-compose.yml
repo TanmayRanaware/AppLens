@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: applens-postgres
+    environment:
+      POSTGRES_USER: applens
+      POSTGRES_PASSWORD: applens
+      POSTGRES_DB: applens
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U applens"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: applens-backend
+    environment:
+      POSTGRES_URL: postgresql+asyncpg://applens:applens@postgres:5432/applens
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MCP_GITHUB_HOST: ${MCP_GITHUB_HOST:-localhost}
+      MCP_GITHUB_PORT: ${MCP_GITHUB_PORT:-8000}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: applens-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+

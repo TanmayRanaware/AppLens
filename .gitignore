@@ -1,1 +1,17 @@
-.DS_Store
+ # Node / Python
+ node_modules/
+ venv/
+ __pycache__/
+ *.pyc
++.venv/
++.mypy_cache/
++.pytest_cache/
++coverage/
+ 
+ # Env & OS
+ .env
+ .env.*
+ .DS_Store
+ 
+ # Docker
+ *.log

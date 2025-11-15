@@ -1,0 +1,12 @@
+{ 
+  email you@email.com
+}
+
+{$DOMAIN} {
+  route /api/* {
+    uri strip_prefix /api
+    reverse_proxy app-backend:8000
+  }
+  reverse_proxy app-frontend:3000
+}
+
