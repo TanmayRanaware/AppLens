@@ -23,6 +23,7 @@ app = FastAPI(
     title="AppLens API",
     description="Microservice Dependency Visualization API",
     version="0.1.0",
+    redirect_slashes=False,  # Don't redirect /graph to /graph/
 )
 
 # CORS middleware

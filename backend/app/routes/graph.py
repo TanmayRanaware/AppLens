@@ -11,7 +11,8 @@ from sqlalchemy import select, func, and_
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")  # Accept both /graph and /graph/
+@router.get("/")  # Accept /graph/ with trailing slash
 async def get_graph(
     repos: Optional[List[str]] = Query(None),
     scan_id: Optional[UUID] = Query(None),
