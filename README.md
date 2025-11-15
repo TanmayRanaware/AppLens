@@ -1,93 +1,161 @@
-# AppLens - Project Group 8
+# AppLens
 
-> **Intelligent Microservice Debugging & Analysis**  
-> Automatically understand, visualize, and debug complex microservice architectures using AI-powered graph analysis.
+**AppLens** is a microservice dependency visualization and analysis tool that scans your GitHub repositories to build an interactive 3D graph of service interactions, including HTTP calls and Kafka message flows.
 
----
+## Features
 
-## 🔴 The Problem
+- 🔍 **Multi-Repo Scanning**: Scan multiple GitHub repositories simultaneously
+- 📊 **3D Graph Visualization**: Interactive force-directed graph showing service dependencies
+- 🤖 **AI-Powered Analysis**: Error analyzer and what-if simulator powered by CrewAI
+- 🔗 **Static Code Analysis**: Detects HTTP calls, Kafka producers/consumers across Python, JavaScript, and Java
+- 💬 **Natural Language Queries**: Ask questions about your service graph in plain English
+- 🔐 **GitHub OAuth**: Secure authentication with GitHub
 
-Modern microservice architectures are incredibly complex and debugging them is painful:
+## Architecture
 
-- **Finding the source of an error** across dozens of services is like finding a needle in a haystack
-- **Understanding downstream impacts** when something breaks requires tribal knowledge and manual investigation
-- **Answering "what if I change this?"** means hours of manual code archaeology across multiple repositories
-- **Service dependencies** are scattered across repos, configs, documentation, and team knowledge
-- **Root cause analysis** often involves jumping between logs, code, and team members
+- **Backend**: Python 3.11 + FastAPI, CrewAI, SQLAlchemy, PostgreSQL with pgvector
+- **Frontend**: Next.js 14, React, TypeScript, react-force-graph-3d, Tailwind CSS
+- **Database**: PostgreSQL with pgvector extension for embeddings
+- **Containerization**: Docker + docker-compose
 
-When a production error occurs, teams waste hours or even days trying to:
-1. Figure out which microservice actually caused the problem
-2. Understand which other services are affected
-3. Identify what changed recently that could have caused it
-4. Assess the blast radius before attempting a fix
+## Quick Start
 
----
+### Prerequisites
 
-## ✅ What We're Solving
+- Docker and Docker Compose
+- GitHub OAuth App (for authentication)
+- OpenAI API key (for embeddings and LLM features)
 
-AppGraph AI creates an **intelligent graph memory of your entire microservice ecosystem** that AI agents can reason over. 
+### Setup
 
-Instead of manual detective work, you get:
+1. **Clone and navigate to the project**:
+   ```bash
+   cd RCA
+   ```
 
-- **Instant service dependency mapping** from your GitHub repositories
-- **AI-powered error analysis** that pinpoints the source microservice from error logs
-- **Visual impact analysis** showing exactly which services are affected
-- **Natural language Q&A** about your architecture and "what-if" scenarios
-- **Context-aware debugging** that correlates errors with recent code changes
+2. **Create environment file**:
+   ```bash
+   cp .env.example .env
+   ```
 
-Think of it as giving your entire microservice architecture a brain that understands how everything connects and can explain what's happening when things go wrong.
+3. **Configure environment variables** in `.env`:
+   - `GITHUB_CLIENT_ID`: Your GitHub OAuth app client ID
+   - `GITHUB_CLIENT_SECRET`: Your GitHub OAuth app client secret
+   - `OPENAI_API_KEY`: Your OpenAI API key
+   - `JWT_SECRET`: A random secret for JWT tokens
 
----
+4. **Start services**:
+   ```bash
+   docker-compose up -d
+   ```
 
-## ✨ Features
+5. **Run database migrations**:
+   ```bash
+   docker-compose exec backend alembic upgrade head
+   ```
 
-### 🕸️ **Automatic Service Graph Construction**
-- **Upload GitHub repo links** (single repos or entire organizations)
-- **Automatic analysis** detects HTTP/gRPC calls, message queues, API contracts, and database dependencies
-- **Unified dependency graph** built across all your microservices
-- **Interactive visualization** showing how every service connects
+6. **Access the application**:
+   - Frontend: http://localhost:3000
+   - Backend API: http://localhost:8000
+   - API Docs: http://localhost:8000/docs
 
-### 🚨 **Intelligent Error Analysis**
-- **Paste any error log or stack trace** into the chat
-- **AI parses and understands** the error in the context of your service graph
-- **Pinpoints the source microservice** with confidence reasoning
-- **Highlights all affected services** (upstream and downstream impact)
-- **Correlates with recent changes** to show what might have caused it
+### GitHub OAuth Setup
 
-### 🎨 **Interactive Service Graph**
-- **Real-time visualization** of your entire microservice architecture
-- **Visual impact highlighting** when errors occur
-- **Click to explore** endpoints, dependencies, and recent code changes
-- **Filter and navigate** by service, protocol type, or recency
+1. Go to GitHub Settings → Developer settings → OAuth Apps
+2. Create a new OAuth App:
+   - Application name: AppLens
+   - Homepage URL: http://localhost:3000
+   - Authorization callback URL: http://localhost:8000/auth/github/callback
+3. Copy the Client ID and Client Secret to your `.env` file
 
-### 🤔 **Natural Language Q&A**
+## Usage
 
-Ask anything about your architecture:
-- *"Which services call the payment API?"*
-- *"If I change the `/inventory/stock` endpoint, what will break?"*
-- *"Show me all services that depend on the auth database"*
-- *"What changed in checkout-service in the last week?"*
-- *"What's the path from user-service to notification-service?"*
+1. **Sign in with GitHub** on the landing page
+2. **Select repositories** to scan (search or enter manually)
+3. **Click Scan** to start the analysis
+4. **View the 3D graph** of service dependencies
+5. **Use the AI Chat** for:
+   - **Error Analyzer**: Paste error logs to identify affected services
+   - **What-If Simulator**: Analyze potential impact of code changes
 
-The AI understands your service graph and answers with precise information and visual highlights.
+## Project Structure
 
-### 🔍 **Context-Aware Root Cause Analysis**
+```
+applens/
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI app
+│   │   ├── config.py            # Configuration
+│   │   ├── auth/                # GitHub OAuth
+│   │   ├── routes/              # API routes
+│   │   ├── services/            # Business logic
+│   │   ├── agents/              # CrewAI agents
+│   │   └── db/                  # Database models
+│   ├── alembic/                 # Database migrations
+│   └── Dockerfile
+├── frontend/
+│   ├── app/                     # Next.js pages
+│   ├── components/              # React components
+│   ├── lib/                     # Utilities
+│   └── Dockerfile
+└── docker-compose.yml
+```
 
-When you paste an error, you get:
-- **Likely origin service** identified from error patterns
-- **Impact cascade visualization** of all affected services
-- **Recent code changes** that might be related
-- **Evidence reasoning** explaining how the conclusion was reached
-- **Suggested next steps** for investigation and remediation
+## Development
 
-### 📊 **What-If Analysis**
-- Understand the impact before making changes
-- See which services depend on specific endpoints or resources
-- Identify circular dependencies and architectural issues
-- Assess deployment risks across service boundaries
+### Backend Development
 
----
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -e .
+uvicorn app.main:app --reload
+```
 
-<div align="center">
-  <p><strong>Built for developers who've debugged one too many microservice incidents</strong></p>
-</div>
+### Frontend Development
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### Database Migrations
+
+```bash
+# Create a new migration
+docker-compose exec backend alembic revision --autogenerate -m "description"
+
+# Apply migrations
+docker-compose exec backend alembic upgrade head
+```
+
+## API Endpoints
+
+- `GET /health` - Health check
+- `GET /auth/github/login` - Initiate GitHub OAuth
+- `GET /auth/github/callback` - OAuth callback
+- `GET /repos/search?q=...` - Search repositories
+- `POST /scan/start` - Start a scan
+- `GET /scan/status/{scan_id}` - Get scan status
+- `GET /graph?repos=...` - Get graph data
+- `POST /chat/error-analyzer` - Analyze error logs
+- `POST /chat/what-if` - Simulate code changes
+- `POST /nlq` - Natural language query
+
+## Testing
+
+```bash
+# Backend tests
+docker-compose exec backend pytest
+
+# Frontend E2E tests
+cd frontend
+npm run test:e2e
+```
+
+## License
+
+MIT
+
