@@ -9,6 +9,8 @@ pipeline {
     BACKEND_IMAGE  = 'tanmayranaware/applens-backend'
     EC2_HOST       = 'ubuntu@ec2-3-21-127-72.us-east-2.compute.amazonaws.com'
     TAG            = "${env.BRANCH_NAME ?: 'main'}-${env.BUILD_NUMBER}"
+    DOCKER_BUILDKIT = '1'
+    DOCKER_CLI_EXPERIMENTAL = 'enabled'
   }
 
   stages {
@@ -23,7 +25,7 @@ pipeline {
           docker version || true
           docker buildx version || true
           docker context ls || true
-          docker info | sed -n '1,30p' || true
+          docker info | sed -n '1,40p' || true
         '''
       }
     }
@@ -40,16 +42,15 @@ pipeline {
     }
 
     stage('Build & Push Images (amd64)') {
-      environment {
-        DOCKER_CLI_EXPERIMENTAL = 'enabled'
-        DOCKER_BUILDKIT = '1'
-      }
       steps {
-        withCredentials([string(credentialsId: 'dockerhub-creds', variable: 'DOCKERHUB_TOKEN')]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                          usernameVariable: 'DOCKERHUB_USER',
+                                          passwordVariable: 'DOCKERHUB_PASS')]) {
           sh '''
             set -eux
-            echo "$DOCKERHUB_TOKEN" | docker login -u tanmayranaware --password-stdin docker.io
+            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin docker.io
 
+            # ensure buildx builder is ready
             docker buildx create --use || true
             docker buildx inspect --bootstrap
 
