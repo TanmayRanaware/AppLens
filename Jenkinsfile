@@ -1,15 +1,21 @@
 pipeline {
   agent any
 
-  options { timestamps(); ansiColor('xterm'); buildDiscarder(logRotator(numToKeepStr: '20')) }
+  options {
+    timestamps()
+    ansiColor('xterm')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    // Global safety timeout (can be overridden per-stage)
+    timeout(time: 60, unit: 'MINUTES')
+  }
 
   environment {
-    REGISTRY       = 'docker.io'
-    FRONTEND_IMAGE = 'tanmayranaware/applens-frontend'
-    BACKEND_IMAGE  = 'tanmayranaware/applens-backend'
-    EC2_HOST       = 'ubuntu@ec2-3-21-127-72.us-east-2.compute.amazonaws.com'
-    TAG            = "${env.BRANCH_NAME ?: 'main'}-${env.BUILD_NUMBER}"
-    DOCKER_BUILDKIT = '1'
+    REGISTRY                = 'docker.io'
+    FRONTEND_IMAGE          = 'tanmayranaware/applens-frontend'
+    BACKEND_IMAGE           = 'tanmayranaware/applens-backend'
+    EC2_HOST                = 'ubuntu@ec2-3-21-127-72.us-east-2.compute.amazonaws.com'
+    TAG                     = "${env.BRANCH_NAME ?: 'main'}-${env.BUILD_NUMBER}"
+    DOCKER_BUILDKIT         = '1'
     DOCKER_CLI_EXPERIMENTAL = 'enabled'
   }
 
@@ -21,7 +27,7 @@ pipeline {
     stage('Check Docker env') {
       steps {
         sh '''
-          set -eux
+          set -euxo pipefail
           docker version || true
           docker buildx version || true
           docker context ls || true
@@ -33,7 +39,7 @@ pipeline {
     stage('Enable Buildx (once per agent)') {
       steps {
         sh '''
-          set -eux
+          set -euxo pipefail
           docker context use default || true
           docker buildx create --use || true
           docker buildx inspect --bootstrap
@@ -42,54 +48,66 @@ pipeline {
     }
 
     stage('Build & Push Images (amd64)') {
+      options {
+        // Keep this tighter so pushes don't hang forever
+        timeout(time: 40, unit: 'MINUTES')
+      }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
                                           usernameVariable: 'DOCKERHUB_USER',
                                           passwordVariable: 'DOCKERHUB_PASS')]) {
           sh '''
-            set -eux
-            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin docker.io
+            set -euxo pipefail
 
-            # ensure buildx builder is ready
+            # Login (registry optional here since it's docker.io)
+            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin "$REGISTRY"
+
+            # Ensure buildx builder is ready
             docker buildx create --use || true
             docker buildx inspect --bootstrap
 
-            # Function to retry buildx build with push
+            # Retryable build+push helper
             retry_build_push() {
-              local image=$1
-              local tag=$2
-              local dockerfile=$3
-              local context=$4
-              local max_attempts=3
-              local attempt=1
-              local delay=5
-              
-              while [ $attempt -le $max_attempts ]; do
-                echo "Attempt $attempt/$max_attempts: Building and pushing ${image}:${tag}"
-                if docker buildx build --platform linux/amd64 \
-                  -t ${image}:${tag} -t ${image}:latest \
-                  -f ${dockerfile} ${context} --push; then
-                  echo "Successfully built and pushed ${image}:${tag}"
+              local image="$1" tag="$2" dockerfile="$3" context="$4"
+              local attempts=5 delay=8 rc=0
+
+              for ((i=1; i<=attempts; i++)); do
+                echo "Attempt $i/$attempts: building & pushing ${image}:${tag}"
+                set +e
+                docker buildx build \
+                  --platform linux/amd64 \
+                  -t "${image}:${tag}" \
+                  -t "${image}:latest" \
+                  -f "${dockerfile}" "${context}" \
+                  --push \
+                  --provenance=false \
+                  --sbom=false \
+                  --progress=plain
+                rc=$?
+                set -e
+
+                if [ $rc -eq 0 ]; then
+                  echo "✅ Successfully pushed ${image}:${tag}"
                   return 0
-                else
-                  if [ $attempt -lt $max_attempts ]; then
-                    echo "Build/push failed, retrying in ${delay}s..."
-                    sleep $delay
-                    delay=$((delay * 2))  # Exponential backoff: 5s, 10s, 20s
-                  fi
-                  attempt=$((attempt + 1))
+                fi
+
+                if [ $i -lt $attempts ]; then
+                  echo "⚠️ Push failed (rc=$rc). Retrying in ${delay}s..."
+                  sleep "$delay"
+                  # Exponential backoff with cap
+                  delay=$(( delay*2 > 60 ? 60 : delay*2 ))
                 fi
               done
-              echo "Failed to build/push ${image}:${tag} after $max_attempts attempts"
+
+              echo "❌ Failed to push ${image}:${tag} after ${attempts} attempts"
               return 1
             }
 
-            # Build and push with retry logic
             echo "Building and pushing frontend image..."
-            retry_build_push ${FRONTEND_IMAGE} ${TAG} frontend/Dockerfile frontend
+            retry_build_push "${FRONTEND_IMAGE}" "${TAG}" "frontend/Dockerfile" "frontend"
 
             echo "Building and pushing backend image..."
-            retry_build_push ${BACKEND_IMAGE} ${TAG} backend/Dockerfile backend
+            retry_build_push "${BACKEND_IMAGE}" "${TAG}" "backend/Dockerfile" "backend"
           '''
         }
       }
@@ -97,22 +115,25 @@ pipeline {
 
     // Always deploy after build & push
     stage('Deploy to EC2') {
+      options {
+        timeout(time: 20, unit: 'MINUTES')
+      }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
                                           usernameVariable: 'DOCKERHUB_USER',
                                           passwordVariable: 'DOCKERHUB_PASS')]) {
           sshagent(credentials: ['ec2-ssh']) {
             sh """
-              set -eux
+              set -euxo pipefail
               ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
-                set -eux
+                set -euxo pipefail
 
-                # Login to Docker Hub on EC2 (Jenkins substitutes the secrets here; Jenkins will mask them in logs)
+                # Login to Docker Hub on EC2
                 echo '${DOCKERHUB_PASS}' | docker login -u '${DOCKERHUB_USER}' --password-stdin docker.io || true
 
                 cd /srv/app
 
-                # Persist the tag used by docker-compose (if your compose references it)
+                # Persist the tag used by docker-compose
                 if grep -q "^TAG=" .env.prod; then
                   sed -i "s/^TAG=.*/TAG=${TAG}/" .env.prod
                 else
