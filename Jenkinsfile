@@ -66,24 +66,39 @@ pipeline {
       }
     }
 
-    stage('Deploy to EC2 (main only)') {
-      when { branch 'main' }
+    // Always deploy after build & push
+    stage('Deploy to EC2') {
       steps {
-        sshagent(credentials: ['ec2-ssh']) {
-          sh """
-            ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
-              set -e
-              cd /srv/app
-              if grep -q "^TAG=" .env.prod; then
-                sed -i "s/^TAG=.*/TAG=${TAG}/" .env.prod
-              else
-                echo "TAG=${TAG}" >> .env.prod
-              fi
-              docker compose -f docker-compose.prod.yml --env-file .env.prod pull
-              docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
-              docker compose -f docker-compose.prod.yml --env-file .env.prod ps
-            '
-          """
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                          usernameVariable: 'DOCKERHUB_USER',
+                                          passwordVariable: 'DOCKERHUB_PASS')]) {
+          sshagent(credentials: ['ec2-ssh']) {
+            sh """
+              set -eux
+              ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
+                set -eux
+                # Login to Docker Hub on the EC2 host (in case pulls need auth)
+                echo "${DOCKERHUB_PASS:-}" | docker login -u "${DOCKERHUB_USER}" --password-stdin docker.io || true
+
+                cd /srv/app
+
+                # persist the tag used by docker-compose (if your compose references it)
+                if grep -q "^TAG=" .env.prod; then
+                  sed -i "s/^TAG=.*/TAG=${TAG}/" .env.prod
+                else
+                  echo "TAG=${TAG}" >> .env.prod
+                fi
+
+                # Pull and restart with the fresh images
+                docker compose -f docker-compose.prod.yml --env-file .env.prod pull
+                docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+                docker compose -f docker-compose.prod.yml --env-file .env.prod ps
+
+                # Optional cleanup
+                docker image prune -f || true
+              '
+            """
+          }
         }
       }
     }
