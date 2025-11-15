@@ -36,8 +36,17 @@ export default function GraphPage() {
   useEffect(() => {
     const loadGraph = async () => {
       try {
+        const scanId = searchParams.get('scan_id')
         const repos = searchParams.get('repos')?.split(',').filter(Boolean) || []
-        const params = repos.length > 0 ? { repos } : {}
+        
+        // Build params: prioritize scan_id if provided, otherwise use repos
+        const params: any = {}
+        if (scanId) {
+          params.scan_id = scanId
+        } else if (repos.length > 0) {
+          params.repos = repos
+        }
+        
         const response = await api.get('/graph', { params })
         console.log('📊 Graph API Response:', {
           nodesCount: response.data?.nodes?.length || 0,

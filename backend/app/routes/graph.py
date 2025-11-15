@@ -1,9 +1,10 @@
 """Graph routes"""
 from fastapi import APIRouter, HTTPException, Request, Query
 from typing import List, Optional
+from uuid import UUID
 from app.routes.auth import get_current_user
 from app.db.base import get_db
-from app.db.models import Service, Interaction, Repository
+from app.db.models import Service, Interaction, Repository, Scan, ScanTarget
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
@@ -13,6 +14,7 @@ router = APIRouter()
 @router.get("/")
 async def get_graph(
     repos: Optional[List[str]] = Query(None),
+    scan_id: Optional[UUID] = Query(None),
     request: Request = None,
 ):
     """Get graph data for visualization"""
@@ -22,7 +24,26 @@ async def get_graph(
         # Build query for services
         service_query = select(Service)
         
-        if repos:
+        if scan_id:
+            # Filter by scan_id - get repos from scan targets
+            scan_result = await session.execute(select(Scan).where(Scan.id == scan_id))
+            scan = scan_result.scalar_one_or_none()
+            
+            if not scan:
+                raise HTTPException(status_code=404, detail="Scan not found")
+            
+            # Get repo IDs from scan targets
+            targets_result = await session.execute(
+                select(ScanTarget.repo_id).where(ScanTarget.scan_id == scan_id)
+            )
+            repo_ids_from_scan = [r for r in targets_result.scalars().all()]
+            
+            if repo_ids_from_scan:
+                service_query = service_query.where(Service.scan_id == scan_id)
+            else:
+                # No targets in scan, return empty graph
+                return {"nodes": [], "links": []}
+        elif repos:
             # Filter by repositories
             repo_result = await session.execute(
                 select(Repository.id).where(Repository.full_name.in_(repos))
@@ -36,7 +57,10 @@ async def get_graph(
         
         # Build query for interactions
         interaction_query = select(Interaction)
-        if repos:
+        if scan_id:
+            # Filter interactions by scan_id
+            interaction_query = interaction_query.where(Interaction.scan_id == scan_id)
+        elif repos:
             service_ids = [s.id for s in services]
             if service_ids:
                 interaction_query = interaction_query.where(
