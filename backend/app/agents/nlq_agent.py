@@ -25,7 +25,7 @@ class NLQAgent:
         self.code_fetch = CodeFetchService(mcp_client) if mcp_client else None
         
         self.llm = ChatOpenAI(
-            model="gpt-4",
+            model="gpt-4o",
             temperature=0.1,
             openai_api_key=settings.openai_api_key,
         )

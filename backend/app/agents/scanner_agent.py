@@ -11,7 +11,7 @@ class ScannerAgent:
     def __init__(self, mcp_client: MCPGitHubClient):
         self.mcp_client = mcp_client
         self.llm = ChatOpenAI(
-            model="gpt-4",
+            model="gpt-4o",
             temperature=0.1,
             openai_api_key=settings.openai_api_key,
         )
