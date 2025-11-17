@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect, useMemo, useCallback, forwardRef } from 'react'
+import { useRef, useMemo, useCallback, useEffect, forwardRef } from 'react'
 import dynamic from 'next/dynamic'
 import * as THREE from 'three'
 import SpriteText from 'three-spritetext'
@@ -35,132 +35,132 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const fgRef = useRef<any>(null)
   const graphRef = (ref as any) || fgRef
 
-  // --- styling helpers -------------------------------------------------------
-  const getNodeColor = useCallback((node: any) => {
-    const id = String(node.id)
-    const whatIf = changedNodes.size > 0
+  // Force a clean remount when topology changes (prevents stale three objects)
+  const graphKey = useMemo(() => {
+    const n = (data?.nodes ?? []).length
+    const l = (data?.links ?? []).length
+    return `g-${n}-${l}`
+  }, [data])
 
+  // colors
+  const getNodeColor = useCallback((n: any) => {
+    const id = String(n.id)
+    const whatIf = changedNodes.size > 0
     if (changedNodes.has(id)) return '#00aaff'
-    if (sourceNode && id === String(sourceNode)) return '#ff0000'
-    if (highlightedNodes.has(id)) return whatIf ? '#ff0000' : '#ffd700'
-    if (selectedNode?.id === node.id) return '#ffd700'
-    return '#00ff00'
+    if (sourceNode && id === String(sourceNode)) return '#ff3b30'
+    if (highlightedNodes.has(id)) return whatIf ? '#ff3b30' : '#ffd700'
+    if (selectedNode?.id === n.id) return '#ffd700'
+    return '#39ff14'
   }, [changedNodes, highlightedNodes, sourceNode, selectedNode])
 
-  // --- sprite label + sphere -------------------------------------------------
-  const nodeWithLabel = useCallback((node: any) => {
-    // small sphere so label is the star
-    const r = 0.18
+  // custom node: tiny sphere + screen-space label (always readable, drawn on top)
+  const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
+    const r = 0.16
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(r, 16, 16),
       new THREE.MeshPhongMaterial({
-        color: getNodeColor(node),
-        emissive: getNodeColor(node),
+        color: getNodeColor(n),
+        emissive: getNodeColor(n),
         emissiveIntensity: 0.35
       })
     )
     group.add(sphere)
 
-    // label (service name)
-    const text = String(node.name ?? node.id ?? 'Unknown')
-    const label = new SpriteText(text) as any
-    label.textHeight = 4.5
-    label.color = '#ffffbf' // warm yellow for contrast
-    label.backgroundColor = 'rgba(0,0,0,0.55)'
+    const label = new SpriteText(String(n.name ?? n.id ?? '')) as any
+    label.textHeight = 32                     // tweak to taste (e.g., 22–36)
+    label.color = '#ffeaa7'
+    label.backgroundColor = 'rgba(0,0,0,0.6)'
     label.padding = 2
-    label.borderWidth = 0
 
-    // keep readable in clutter
     if (label.material) {
+      // Some THREE versions don't expose sizeAttenuation; guard it.
+      // @ts-ignore
+      if ('sizeAttenuation' in label.material) label.material.sizeAttenuation = false
+      label.material.depthTest = false        // draw on top
       label.material.depthWrite = false
-      label.material.depthTest = false
+      label.material.transparent = true
+      label.material.opacity = 1
+      // @ts-ignore
+      if ('needsUpdate' in label.material) label.material.needsUpdate = true
     }
-    label.renderOrder = 999
+    label.renderOrder = 9999
+    label.frustumCulled = false               // don't cull near edges
+    label.position.set(0, r * 3.2, 0)         // above sphere
 
-    // position just above the sphere
-    label.position.set(0, r * 3.2, 0)
     group.add(label)
-
     return group
   }, [getNodeColor])
 
-  // --- stabilize input data --------------------------------------------------
+  // normalize data
   const cleanData = useMemo(() => {
-    if (!data) return { nodes: [], links: [] }
-
-    const nodes = (data.nodes || []).map((n: any, i: number) => ({
+    const nodes = (data?.nodes ?? []).map((n: any, i: number) => ({
       ...n,
       id: String(n.id ?? n.name ?? `n-${i}`),
       name: String(n.name ?? n.id ?? `n-${i}`)
     }))
-    const byId = new Map(nodes.map((n: any) => [String(n.id), n]))
-
-    const links = (data.links || [])
+    const byId = new Map(nodes.map((n: any) => [n.id, n]))
+    const links = (data?.links ?? [])
       .map((l: any) => {
-        const sid = String(l.source?.id ?? l.source)
-        const tid = String(l.target?.id ?? l.target)
-        if (!byId.has(sid) || !byId.has(tid)) return null
-        return { ...l, source: byId.get(sid), target: byId.get(tid) }
+        const s = String(l.source?.id ?? l.source)
+        const t = String(l.target?.id ?? l.target)
+        if (!byId.has(s) || !byId.has(t)) return null
+        return { ...l, source: byId.get(s), target: byId.get(t) }
       })
       .filter(Boolean) as any[]
-
     return { nodes, links }
   }, [data])
 
-  // --- apply accessor through ref as well & force rebuild --------------------
+  // ensure our accessor is applied + force rebuild
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
-
-    if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeWithLabel)
+    if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
     if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false)
     if (typeof g.refresh === 'function') g.refresh()
-  }, [graphRef, cleanData, nodeWithLabel])
+  }, [graphRef, nodeThreeObject, cleanData])
 
-  // --- interactions ----------------------------------------------------------
-  const onNodeClick = useCallback((node: any) => {
-    onNodeSelect?.(node)
+  const onNodeClick = useCallback((n: any) => {
+    onNodeSelect?.(n)
     const dist = 90
-    const ratio = 1 + dist / Math.hypot(node.x || 0, node.y || 0, node.z || 0)
+    const ratio = 1 + dist / Math.hypot(n.x || 0, n.y || 0, n.z || 0)
     graphRef.current?.cameraPosition(
-      { x: (node.x || 0) * ratio, y: (node.y || 0) * ratio, z: (node.z || 0) * ratio },
-      node,
-      800
+      { x: (n.x || 0) * ratio, y: (n.y || 0) * ratio, z: (n.z || 0) * ratio },
+      n,
+      850
     )
     const controls = graphRef.current?.controls?.()
     if (controls) controls.autoRotate = false
   }, [onNodeSelect, graphRef])
 
-  // --- render ---------------------------------------------------------------
   return (
     <div className="relative w-full h-full" style={{ background: '#000011' }}>
       <ForceGraph3D
+        key={graphKey}
         ref={graphRef}
         graphData={cleanData}
         backgroundColor="#000011"
         showNavInfo={false}
-        nodeThreeObject={nodeWithLabel}
+        // Disable log depth buffer to avoid SpriteText vanishing behind geometry
+        rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
+        nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
-        nodeLabel={(n: any) => String(n.name ?? n.id ?? '')} // still shows on hover
-        linkColor={(link: any) => {
-          const s = String(link.source?.id || link.source)
-          const t = String(link.target?.id || link.target)
-          const key = `${s}-${t}`, rkey = `${t}-${s}`
-          const hi = highlightedLinks.has(key) || highlightedLinks.has(rkey)
-                    || highlightedNodes.has(s) || highlightedNodes.has(t)
+        nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
+        linkColor={(l: any) => {
+          const s = String(l.source?.id || l.source)
+          const t = String(l.target?.id || l.target)
+          const k = `${s}-${t}`, rk = `${t}-${s}`
+          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) || highlightedNodes.has(s) || highlightedNodes.has(t)
           if (hi) return '#ff6b6b'
-          const kind = (link.kind || link.type || '').toString().toUpperCase()
-          if (kind === 'KAFKA') return '#ffd700'
-          return '#ffffff'
+          const kind = (l.kind || l.type || '').toString().toUpperCase()
+          return kind === 'KAFKA' ? '#ffd700' : '#ffffff'
         }}
-        linkWidth={(link: any) => {
-          const s = String(link.source?.id || link.source)
-          const t = String(link.target?.id || link.target)
-          const key = `${s}-${t}`, rkey = `${t}-${s}`
-          const hi = highlightedLinks.has(key) || highlightedLinks.has(rkey)
-                    || highlightedNodes.has(s) || highlightedNodes.has(t)
+        linkWidth={(l: any) => {
+          const s = String(l.source?.id || l.source)
+          const t = String(l.target?.id || l.target)
+          const k = `${s}-${t}`, rk = `${t}-${s}`
+          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) || highlightedNodes.has(s) || highlightedNodes.has(t)
           return hi ? 0.18 : 0.25
         }}
         linkOpacity={0.6}
