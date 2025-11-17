@@ -21,13 +21,13 @@ interface Graph3DProps {
 
 const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   {
-    data,
+  data, 
     highlightedNodes = new Set(),
     highlightedLinks = new Set(),
     sourceNode,
     changedNodes = new Set(),
-    onNodeSelect,
-    selectedNode
+  onNodeSelect,
+  selectedNode
   },
   ref
 ) {
@@ -70,8 +70,8 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(r, 16, 16),
       new THREE.MeshPhongMaterial({
-        color: getNodeColor(n),
-        emissive: getNodeColor(n),
+        color: 0x0066ff, // Blue color
+        emissive: 0x0066ff, // Blue emissive
         emissiveIntensity: 0.35
       })
     )
