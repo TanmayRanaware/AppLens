@@ -1,9 +1,8 @@
 'use client'
 
-import { useRef, useMemo, useCallback, useEffect, forwardRef } from 'react'
+import { useRef, useMemo, useCallback, useEffect, useState, forwardRef } from 'react'
 import dynamic from 'next/dynamic'
 import * as THREE from 'three'
-import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer' // TS path (no .js)
 
 const ForceGraph3D = dynamic(
   () => import('react-force-graph-3d').then(m => m.default),
@@ -35,24 +34,24 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const fgRef = useRef<any>(null)
   const graphRef = (ref as any) || fgRef
 
-  // Re-mount if topology changes
+  const [CSS2D, setCSS2D] = useState<{ CSS2DRenderer: any; CSS2DObject: any } | null>(null)
+
+  // lazy-load CSS2D so the build doesn't need its types
+  useEffect(() => {
+    let mounted = true
+    import('three/examples/jsm/renderers/CSS2DRenderer.js')
+      .then(mod => { if (mounted) setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject }) })
+      .catch(() => setCSS2D(null))
+    return () => { mounted = false }
+  }, [])
+
+  // re-mount if topology changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
     return `g-${n}-${l}`
   }, [data])
 
-  // Create CSS2D renderer once (overlay for HTML labels)
-  const css2d = useMemo(() => {
-    const r = new CSS2DRenderer()
-    r.domElement.style.position = 'absolute'
-    r.domElement.style.top = '0'
-    r.domElement.style.left = '0'
-    r.domElement.style.pointerEvents = 'none'
-    return r
-  }, [])
-
-  // colors
   const getNodeColor = useCallback((n: any) => {
     const id = String(n.id)
     const whatIf = changedNodes.size > 0
@@ -78,26 +77,30 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     )
     group.add(sphere)
 
-    const el = document.createElement('div')
-    el.textContent = String(n.name ?? n.id ?? '')
-    el.style.fontSize = '12px'
-    el.style.lineHeight = '1'
-    el.style.padding = '2px 6px'
-    el.style.borderRadius = '6px'
-    el.style.background = 'rgba(0,0,0,0.55)'
-    el.style.color = '#ffeaa7'
-    el.style.whiteSpace = 'nowrap'
-    el.style.userSelect = 'none'
-    el.style.pointerEvents = 'none'
+    // only add HTML label once CSS2D is ready (it will be on the client)
+    if (CSS2D?.CSS2DObject) {
+      const el = document.createElement('div')
+      el.textContent = String(n.name ?? n.id ?? '')
+      Object.assign(el.style, {
+        fontSize: '12px',
+        lineHeight: '1',
+        padding: '2px 6px',
+        borderRadius: '6px',
+        background: 'rgba(0,0,0,0.55)',
+        color: '#ffeaa7',
+        whiteSpace: 'nowrap',
+        userSelect: 'none',
+        pointerEvents: 'none'
+      } as CSSStyleDeclaration)
 
-    const label = new CSS2DObject(el)
-    label.position.set(0, r * 3.2, 0) // above sphere
-    group.add(label)
+      const label = new CSS2D.CSS2DObject(el)
+      label.position.set(0, r * 3.2, 0) // above sphere
+      group.add(label)
+    }
 
     return group
-  }, [getNodeColor])
+  }, [getNodeColor, CSS2D])
 
-  // normalize data
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => ({
       ...n,
@@ -116,7 +119,6 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // ensure our accessor is applied + force rebuild
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
@@ -138,6 +140,18 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     if (controls) controls.autoRotate = false
   }, [onNodeSelect, graphRef])
 
+  // prepare the overlay renderer once CSS2D is loaded
+  const extraRenderers = useMemo(() => {
+    if (!CSS2D?.CSS2DRenderer) return []
+    const r = new CSS2D.CSS2DRenderer()
+    r.domElement.style.position = 'absolute'
+    r.domElement.style.top = '0'
+    r.domElement.style.left = '0'
+    r.domElement.style.pointerEvents = 'none'
+    // Cast to satisfy react-force-graph-3d typing; runtime is fine
+    return [r as unknown as THREE.Renderer]
+  }, [CSS2D])
+
   return (
     <div className="relative w-full h-full" style={{ background: '#000011' }}>
       <ForceGraph3D
@@ -146,8 +160,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         graphData={cleanData}
         backgroundColor="#000011"
         showNavInfo={false}
-        // TS thinks extraRenderers must be THREE.Renderer (canvas). Cast is safe at runtime.
-        extraRenderers={[css2d as unknown as THREE.Renderer]}
+        extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={true}
