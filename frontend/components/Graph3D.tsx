@@ -56,7 +56,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
 
   // Colors & sizes
   const DARK_BLUE = 0x0a2a6b
-  const NODE_DIAMETER = 1.0
+  const NODE_DIAMETER = 3.0
   const R = NODE_DIAMETER / 2 // === 0.5
 
   // Custom sphere + optional HTML label
