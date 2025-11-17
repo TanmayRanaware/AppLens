@@ -31,65 +31,60 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   },
   ref
 ) {
-  const fgRef = useRef<any>(null)
-  const graphRef = (ref as any) || fgRef
+  const graphRef = useRef<any>(null)
 
   const [CSS2D, setCSS2D] = useState<{ CSS2DRenderer: any; CSS2DObject: any } | null>(null)
 
-  // client-only load for CSS2D
   useEffect(() => {
-    let mounted = true
     import('three/examples/jsm/renderers/CSS2DRenderer.js')
-      .then(mod => { if (mounted) setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject }) })
+      .then(mod => setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject }))
       .catch(() => setCSS2D(null))
-    return () => { mounted = false }
   }, [])
 
-  // key so graph re-mounts when topology size changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
     return `g-${n}-${l}`
   }, [data])
 
-  // === Appearance ===
+  // Green color and 3.0 diameter
   const GREEN_HEX = 0x00ff00
   const DIAMETER = 3.0
   const R = DIAMETER / 2 // 1.5 radius
 
-  // Custom sphere + optional HTML label
-  const nodeThreeObject = useCallback((n: any) => {
-    const group = new THREE.Group()
+  const nodeThreeObject = useCallback(
+    (n: any) => {
+      const group = new THREE.Group()
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(R, 32, 32),
+        new THREE.MeshBasicMaterial({ color: GREEN_HEX })
+      )
+      group.add(sphere)
 
-    // MeshBasicMaterial to avoid light color shifts (always vivid green)
-    const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(R, 32, 32),
-      new THREE.MeshBasicMaterial({ color: GREEN_HEX })
-    )
-    group.add(sphere)
+      if (CSS2D?.CSS2DObject) {
+        const el = document.createElement('div')
+        el.textContent = String(n.name ?? n.id ?? '')
+        Object.assign(el.style, {
+          fontSize: '12px',
+          lineHeight: '1',
+          padding: '2px 6px',
+          borderRadius: '6px',
+          background: 'rgba(0,0,0,0.55)',
+          color: '#ffeaa7',
+          whiteSpace: 'nowrap',
+          userSelect: 'none',
+          pointerEvents: 'none'
+        } as CSSStyleDeclaration)
 
-    if (CSS2D?.CSS2DObject) {
-      const el = document.createElement('div')
-      el.textContent = String(n.name ?? n.id ?? '')
-      Object.assign(el.style, {
-        fontSize: '12px',
-        lineHeight: '1',
-        padding: '2px 6px',
-        borderRadius: '6px',
-        background: 'rgba(0,0,0,0.55)',
-        color: '#ffeaa7',
-        whiteSpace: 'nowrap',
-        userSelect: 'none',
-        pointerEvents: 'none'
-      } as CSSStyleDeclaration)
+        const label = new CSS2D.CSS2DObject(el)
+        label.position.set(0, R * 2.2, 0)
+        group.add(label)
+      }
 
-      const label = new CSS2D.CSS2DObject(el)
-      label.position.set(0, R * 2.2, 0) // keep above sphere
-      group.add(label)
-    }
-
-    return group
-  }, [CSS2D])
+      return group
+    },
+    [CSS2D]
+  )
 
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => ({
@@ -109,12 +104,24 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // Only refresh when data changes (no imperative nodeThreeObjectExtend calls)
+  const extraRenderers = useMemo(() => {
+    if (!CSS2D?.CSS2DRenderer) return []
+    const r = new CSS2D.CSS2DRenderer()
+    r.domElement.style.position = 'absolute'
+    r.domElement.style.top = '0'
+    r.domElement.style.left = '0'
+    r.domElement.style.pointerEvents = 'none'
+    return [r as unknown as THREE.Renderer]
+  }, [CSS2D])
+
+  // Apply custom nodes before render initialization
   useEffect(() => {
     const g = graphRef.current
-    if (!g || !cleanData.nodes.length) return
-    if (typeof g.refresh === 'function') g.refresh()
-  }, [graphRef, cleanData])
+    if (g) {
+      g.nodeThreeObject(nodeThreeObject)
+      g.nodeThreeObjectExtend(false)
+    }
+  }, [nodeThreeObject])
 
   const onNodeClick = useCallback((n: any) => {
     onNodeSelect?.(n)
@@ -129,16 +136,6 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     if (controls) controls.autoRotate = false
   }, [onNodeSelect])
 
-  const extraRenderers = useMemo(() => {
-    if (!CSS2D?.CSS2DRenderer) return []
-    const r = new CSS2D.CSS2DRenderer()
-    r.domElement.style.position = 'absolute'
-    r.domElement.style.top = '0'
-    r.domElement.style.left = '0'
-    r.domElement.style.pointerEvents = 'none'
-    return [r as unknown as THREE.Renderer]
-  }, [CSS2D])
-
   return (
     <div className="relative w-full h-full" style={{ background: '#000011' }}>
       <ForceGraph3D
@@ -149,20 +146,15 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         showNavInfo={false}
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
-
-        // Use ONLY our custom objects
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
-
-        // Backstop: if the library ever falls back to defaults, still show green
         nodeColor={() => '#00ff00'}
-
-        nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
           const t = String(l.target?.id || l.target)
           const k = `${s}-${t}`, rk = `${t}-${s}`
-          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) || highlightedNodes.has(s) || highlightedNodes.has(t)
+          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) ||
+                     highlightedNodes.has(s) || highlightedNodes.has(t)
           if (hi) return '#ff6b6b'
           const kind = (l.kind || l.type || '').toString().toUpperCase()
           return kind === 'KAFKA' ? '#ffd700' : '#ffffff'
@@ -171,7 +163,8 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
           const s = String(l.source?.id || l.source)
           const t = String(l.target?.id || l.target)
           const k = `${s}-${t}`, rk = `${t}-${s}`
-          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) || highlightedNodes.has(s) || highlightedNodes.has(t)
+          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) ||
+                     highlightedNodes.has(s) || highlightedNodes.has(t)
           return hi ? 0.18 : 0.25
         }}
         linkOpacity={0.6}
