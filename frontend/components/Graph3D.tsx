@@ -36,7 +36,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
 
   const [CSS2D, setCSS2D] = useState<{ CSS2DRenderer: any; CSS2DObject: any } | null>(null)
 
-  // Load CSS2D only in the browser to avoid type/module resolution during build
+  // Load CSS2D only in the browser
   useEffect(() => {
     let mounted = true
     import('three/examples/jsm/renderers/CSS2DRenderer.js')
@@ -54,9 +54,8 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return `g-${n}-${l}`
   }, [data])
 
-  // Single dark-blue color
+  // Dark blue color for nodes
   const DARK_BLUE = 0x0a2a6b
-  const getNodeColor = useCallback(() => DARK_BLUE, [])
 
   // Custom sphere + optional HTML label
   const nodeThreeObject = useCallback((n: any) => {
@@ -66,11 +65,11 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(r, 16, 16),
       new THREE.MeshPhongMaterial({
-        color: DARK_BLUE,
-        emissive: DARK_BLUE,
-        emissiveIntensity: 0.35,
-        specular: 0x111111,
-        shininess: 25
+        color: DARK_BLUE,          // base color
+        emissive: DARK_BLUE,       // glow in same tone
+        emissiveIntensity: 0.4,    // slightly stronger glow
+        specular: 0x000000,        // avoid yellowish highlights
+        shininess: 80
       })
     )
     group.add(sphere)
@@ -116,6 +115,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
+  // Make sure our custom objects are applied
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
@@ -158,7 +158,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
         nodeThreeObject={nodeThreeObject}
-        nodeThreeObjectExtend={false}
+        nodeThreeObjectExtend={false}  // ensures no default yellow spheres
         nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
