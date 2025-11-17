@@ -40,22 +40,15 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       .catch(() => setCSS2D(null))
   }, [])
 
-  // 🔸 SINGLE VARIABLE — change this to recolor BOTH nodes + labels
-  const NODE_COLOR = '#ff8c00' // try '#ff4c4c' (red), '#4a90e2' (blue), '#19b45b' (green)
-  // derive the numeric color for Three.js from the CSS hex
-  const NODE_COLOR_NUM = parseInt(NODE_COLOR.replace('#', ''), 16)
+  // 🔸 SINGLE VARIABLE — update this to recolor BOTH nodes + labels
+  const NODE_COLOR = '#ff8c00' // example: '#ff4c4c'(red), '#4a90e2'(blue), '#19b45b'(green)
+  const NODE_COLOR_NUM = parseInt(NODE_COLOR.slice(1), 16)
 
   // Size
   const DIAMETER = 3.0
   const R = DIAMETER / 2
 
-  // Log once so you can verify the component actually updated
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('Graph3D using node color ->', NODE_COLOR)
-  }, [NODE_COLOR])
-
-  // Force a remount when color/size changes
+  // Force remount if color/size changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
@@ -63,21 +56,20 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return `g-${n}-${l}-${STYLE}`
   }, [data, NODE_COLOR, DIAMETER])
 
-  // Build node object: unlit so color is exact, toneMapped off to avoid renderer tweaks
+  // Custom node (unlit → exact color)
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
-    const material = new THREE.MeshBasicMaterial({ color: NODE_COLOR_NUM })
-    ;(material as any).toneMapped = false
+    const mat = new THREE.MeshBasicMaterial({ color: NODE_COLOR_NUM })
+    ;(mat as any).toneMapped = false
 
-    const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, 32, 32), material)
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, 32, 32), mat)
     ;(sphere.material as THREE.MeshBasicMaterial).color.set(NODE_COLOR_NUM)
     group.add(sphere)
 
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
-      // strong inline CSS to defeat global overrides
       el.style.cssText = `
         font-size:12px; line-height:1; padding:2px 6px; border-radius:6px;
         background:transparent !important;
@@ -94,7 +86,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return group
   }, [CSS2D, NODE_COLOR, NODE_COLOR_NUM])
 
-  // Strip per-node color so nothing overrides ours
+  // Clean data (drop any incoming node.color)
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => {
       const { color: _drop, ...rest } = n || {}
@@ -116,7 +108,21 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // Dispose helper (clears stale meshes/materials)
+  // Helper: hard-override all mesh colors in the scene
+  const forceSceneNodeColor = useCallback((gInst: any) => {
+    const scene: THREE.Scene | undefined = gInst?.scene?.()
+    if (!scene) return
+    scene.traverse(obj => {
+      const mesh = obj as any
+      const mat = mesh?.material
+      if (mesh?.isMesh && mat && mat.color) {
+        mat.color.set(NODE_COLOR)
+        if ('toneMapped' in mat) mat.toneMapped = false
+      }
+    })
+  }, [NODE_COLOR])
+
+  // Dispose helper (avoid stale materials)
   const disposeSceneObjects = useCallback((gInst: any) => {
     try {
       const scene: THREE.Scene | undefined = gInst?.scene?.()
@@ -134,7 +140,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     } catch {}
   }, [])
 
-  // Force rebuild so our color takes effect 100%
+  // Force rebuild + hard color override
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
@@ -145,9 +151,12 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     disposeSceneObjects(g)
     g.graphData({ nodes: [], links: [] })
     requestAnimationFrame(() => {
-      if (graphRef.current) graphRef.current.graphData(cleanData)
+      if (!graphRef.current) return
+      graphRef.current.graphData(cleanData)
+      // one more frame later, force-set colors on any mesh that slipped through
+      requestAnimationFrame(() => forceSceneNodeColor(graphRef.current))
     })
-  }, [nodeThreeObject, cleanData, disposeSceneObjects])
+  }, [nodeThreeObject, cleanData, disposeSceneObjects, forceSceneNodeColor])
 
   const extraRenderers = useMemo(() => {
     if (!CSS2D?.CSS2DRenderer) return []
@@ -183,14 +192,9 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
 
-        // use ONLY our meshes
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
-
-        // disable built-in tooltip label (we draw our own)
-        nodeLabel={() => ''}
-
-        // no nodeColor prop — avoids library repainting defaults
+        nodeLabel={() => ''}  // we render CSS2D labels ourselves
       />
     </div>
   )
