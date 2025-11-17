@@ -36,42 +36,35 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
 
   const [CSS2D, setCSS2D] = useState<{ CSS2DRenderer: any; CSS2DObject: any } | null>(null)
 
-  // Load CSS2D only in the browser
+  // client-only load for CSS2D
   useEffect(() => {
     let mounted = true
     import('three/examples/jsm/renderers/CSS2DRenderer.js')
-      .then(mod => {
-        if (mounted) setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject })
-      })
+      .then(mod => { if (mounted) setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject }) })
       .catch(() => setCSS2D(null))
     return () => { mounted = false }
   }, [])
 
-  // Re-mount key if topology size changes
+  // key so graph re-mounts when topology size changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
     return `g-${n}-${l}`
   }, [data])
 
-  // Colors & sizes
-  const GREEN = 0x00ff00
-  const NODE_DIAMETER = 3.0
-  const R = NODE_DIAMETER / 2 // radius = 1.5
+  // === Appearance ===
+  const GREEN_HEX = 0x00ff00
+  const DIAMETER = 3.0
+  const R = DIAMETER / 2 // 1.5 radius
 
   // Custom sphere + optional HTML label
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
+    // MeshBasicMaterial to avoid light color shifts (always vivid green)
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(R, 32, 32),
-      new THREE.MeshPhongMaterial({
-        color: GREEN,
-        emissive: GREEN,
-        emissiveIntensity: 0.4,
-        specular: 0x003300,
-        shininess: 50
-      })
+      new THREE.MeshBasicMaterial({ color: GREEN_HEX })
     )
     group.add(sphere)
 
@@ -91,7 +84,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       } as CSSStyleDeclaration)
 
       const label = new CSS2D.CSS2DObject(el)
-      label.position.set(0, R * 2.2, 0) // above sphere, proportional to radius
+      label.position.set(0, R * 2.2, 0) // keep above sphere
       group.add(label)
     }
 
@@ -116,14 +109,12 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // Apply custom objects
+  // Only refresh when data changes (no imperative nodeThreeObjectExtend calls)
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
-    if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
-    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false)
     if (typeof g.refresh === 'function') g.refresh()
-  }, [graphRef, nodeThreeObject, cleanData])
+  }, [graphRef, cleanData])
 
   const onNodeClick = useCallback((n: any) => {
     onNodeSelect?.(n)
@@ -158,8 +149,14 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         showNavInfo={false}
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
+
+        // Use ONLY our custom objects
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
+
+        // Backstop: if the library ever falls back to defaults, still show green
+        nodeColor={() => '#00ff00'}
+
         nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
