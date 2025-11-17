@@ -29,7 +29,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     onNodeSelect,
     selectedNode
   },
-  ref
+  _ref
 ) {
   const graphRef = useRef<any>(null)
 
@@ -40,31 +40,28 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       .catch(() => setCSS2D(null))
   }, [])
 
-  // Include a style token so the FG3D instance re-mounts with our custom node objects
-  // Bump STYLE token if you still see blue/default colors
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    const STYLE = 'green_d3_r1.5'  // style token forces remount
+    const STYLE = 'darkgreen_diam3_labelmatch'
     return `g-${n}-${l}-${STYLE}`
   }, [data])
 
-  // Appearance: pure green, diameter 3
-  const GREEN_HEX = 0x00ff00
+  // Appearance: darker green (less neon), diameter 3
+  const DARK_GREEN_HEX = 0x007a33 // deep green
   const DIAMETER = 3.0
-  const R = DIAMETER / 2 // 1.5
+  const R = DIAMETER / 2 // 1.5 radius
 
-  // Build our custom node (green, unlit) + optional CSS2D label
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(R, 32, 32),
-      // MeshBasicMaterial = unlit => exact color (no scene lights turning it blue)
-      new THREE.MeshBasicMaterial({ color: GREEN_HEX })
+      new THREE.MeshBasicMaterial({ color: DARK_GREEN_HEX }) // unlit dark green
     )
     group.add(sphere)
 
+    // Label matching node color
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
@@ -74,7 +71,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         padding: '2px 6px',
         borderRadius: '6px',
         background: 'rgba(0,0,0,0.55)',
-        color: '#ffeaa7',
+        color: '#007a33', // same as node color (dark green)
         whiteSpace: 'nowrap',
         userSelect: 'none',
         pointerEvents: 'none'
@@ -87,17 +84,16 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return group
   }, [CSS2D])
 
-  // Sanitize input: remove any per-node `color` so it can't override green
+  // Clean data (drop color fields)
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => {
-      const { color: _dropColor, ...rest } = n || {}
+      const { color: _drop, ...rest } = n || {}
       return {
         ...rest,
         id: String(rest.id ?? rest.name ?? `n-${i}`),
         name: String(rest.name ?? rest.id ?? `n-${i}`)
       }
     })
-
     const byId = new Map(nodes.map((n: any) => [n.id, n]))
     const links = (data?.links ?? [])
       .map((l: any) => {
@@ -111,21 +107,17 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // Nuclear option: Force rebuild of objects to clear old blue/default spheres
+  // Force rebuild to clear cached default meshes
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
 
-    // Set custom node factory
     if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
     if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false)
 
-    // Force rebuild: clear old objects then re-create with green material
     g.graphData({ nodes: [], links: [] })
     requestAnimationFrame(() => {
-      if (graphRef.current) {
-        graphRef.current.graphData(cleanData)
-      }
+      if (graphRef.current) graphRef.current.graphData(cleanData)
     })
   }, [nodeThreeObject, cleanData])
 
@@ -162,21 +154,19 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         showNavInfo={false}
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
-
-        // CRITICAL: only our mesh, no default blue spheres
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
-
-        // Backstop (if FG3D ever falls back to defaults)
-        nodeColor={() => '#00ff00'}
-
+        nodeColor={() => '#007a33'}
         nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
           const t = String(l.target?.id || l.target)
           const k = `${s}-${t}`, rk = `${t}-${s}`
-          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) ||
-                     highlightedNodes.has(s) || highlightedNodes.has(t)
+          const hi =
+            highlightedLinks.has(k) ||
+            highlightedLinks.has(rk) ||
+            highlightedNodes.has(s) ||
+            highlightedNodes.has(t)
           if (hi) return '#ff6b6b'
           const kind = (l.kind || l.type || '').toString().toUpperCase()
           return kind === 'KAFKA' ? '#ffd700' : '#ffffff'
@@ -185,8 +175,11 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
           const s = String(l.source?.id || l.source)
           const t = String(l.target?.id || l.target)
           const k = `${s}-${t}`, rk = `${t}-${s}`
-          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) ||
-                     highlightedNodes.has(s) || highlightedNodes.has(t)
+          const hi =
+            highlightedLinks.has(k) ||
+            highlightedLinks.has(rk) ||
+            highlightedNodes.has(s) ||
+            highlightedNodes.has(t)
           return hi ? 0.18 : 0.25
         }}
         linkOpacity={0.6}
