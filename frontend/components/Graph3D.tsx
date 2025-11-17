@@ -54,21 +54,22 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return `g-${n}-${l}`
   }, [data])
 
-  // Dark blue color for nodes
+  // Colors & sizes
   const DARK_BLUE = 0x0a2a6b
+  const NODE_DIAMETER = 1.0
+  const R = NODE_DIAMETER / 2 // === 0.5
 
   // Custom sphere + optional HTML label
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
-    const r = 0.16
     const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(r, 16, 16),
+      new THREE.SphereGeometry(R, 16, 16),
       new THREE.MeshPhongMaterial({
-        color: DARK_BLUE,          // base color
-        emissive: DARK_BLUE,       // glow in same tone
-        emissiveIntensity: 0.4,    // slightly stronger glow
-        specular: 0x000000,        // avoid yellowish highlights
+        color: DARK_BLUE,
+        emissive: DARK_BLUE,
+        emissiveIntensity: 0.4,
+        specular: 0x000000,
         shininess: 80
       })
     )
@@ -90,7 +91,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       } as CSSStyleDeclaration)
 
       const label = new CSS2D.CSS2DObject(el)
-      label.position.set(0, r * 3.2, 0)
+      label.position.set(0, R * 3.2, 0) // keep label above sphere, scaled with radius
       group.add(label)
     }
 
@@ -115,12 +116,12 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // Make sure our custom objects are applied
+  // Apply custom objects
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
     if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
-    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false) // disable default yellow mesh
+    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false) // disable default mesh
     if (typeof g.refresh === 'function') g.refresh()
   }, [graphRef, nodeThreeObject, cleanData])
 
@@ -158,7 +159,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
         nodeThreeObject={nodeThreeObject}
-        nodeThreeObjectExtend={false}  // ensures no default yellow spheres
+        nodeThreeObjectExtend={false}
         nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
