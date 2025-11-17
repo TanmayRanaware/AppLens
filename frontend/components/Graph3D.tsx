@@ -43,25 +43,25 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    const STYLE = 'darkgreen_diam3_labelmatch'
+    const STYLE = 'deepgreen_diam3_labelmatch'
     return `g-${n}-${l}-${STYLE}`
   }, [data])
 
-  // Appearance: darker green (less neon), diameter 3
-  const DARK_GREEN_HEX = 0x007a33 // deep green
+  // Darker green tone and larger nodes
+  const DARKER_GREEN_HEX = 0x004d1a // deep forest green
   const DIAMETER = 3.0
-  const R = DIAMETER / 2 // 1.5 radius
+  const R = DIAMETER / 2 // radius = 1.5
 
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(R, 32, 32),
-      new THREE.MeshBasicMaterial({ color: DARK_GREEN_HEX }) // unlit dark green
+      new THREE.MeshBasicMaterial({ color: DARKER_GREEN_HEX }) // unlit darker green
     )
     group.add(sphere)
 
-    // Label matching node color
+    // Label with same color as node
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
@@ -71,7 +71,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         padding: '2px 6px',
         borderRadius: '6px',
         background: 'rgba(0,0,0,0.55)',
-        color: '#007a33', // same as node color (dark green)
+        color: '#004d1a', // exact same as node color
         whiteSpace: 'nowrap',
         userSelect: 'none',
         pointerEvents: 'none'
@@ -84,7 +84,6 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return group
   }, [CSS2D])
 
-  // Clean data (drop color fields)
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => {
       const { color: _drop, ...rest } = n || {}
@@ -103,11 +102,10 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         return { ...l, source: byId.get(s), target: byId.get(t) }
       })
       .filter(Boolean) as any[]
-
     return { nodes, links }
   }, [data])
 
-  // Force rebuild to clear cached default meshes
+  // Force rebuild to ensure colors refresh
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
@@ -156,7 +154,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
-        nodeColor={() => '#007a33'}
+        nodeColor={() => '#004d1a'} // backstop
         nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
