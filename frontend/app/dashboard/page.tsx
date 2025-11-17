@@ -96,7 +96,7 @@ export default function DashboardPage() {
           {/* Manual Repo Input */}
           <div>
             <label className="block text-sm font-medium text-white mb-2">
-              Add Repository (format: owner/repo)
+              Add Repository
             </label>
             <div className="flex gap-2">
               <input
