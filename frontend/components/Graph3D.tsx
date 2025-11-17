@@ -55,22 +55,22 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   }, [data])
 
   // Colors & sizes
-  const DARK_BLUE = 0x0a2a6b
+  const GREEN = 0x00ff00
   const NODE_DIAMETER = 3.0
-  const R = NODE_DIAMETER / 2 // === 0.5
+  const R = NODE_DIAMETER / 2 // radius = 1.5
 
   // Custom sphere + optional HTML label
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
     const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(R, 16, 16),
+      new THREE.SphereGeometry(R, 32, 32),
       new THREE.MeshPhongMaterial({
-        color: DARK_BLUE,
-        emissive: DARK_BLUE,
+        color: GREEN,
+        emissive: GREEN,
         emissiveIntensity: 0.4,
-        specular: 0x000000,
-        shininess: 80
+        specular: 0x003300,
+        shininess: 50
       })
     )
     group.add(sphere)
@@ -91,7 +91,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       } as CSSStyleDeclaration)
 
       const label = new CSS2D.CSS2DObject(el)
-      label.position.set(0, R * 3.2, 0) // keep label above sphere, scaled with radius
+      label.position.set(0, R * 2.2, 0) // above sphere, proportional to radius
       group.add(label)
     }
 
@@ -121,7 +121,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
     if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
-    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false) // disable default mesh
+    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false)
     if (typeof g.refresh === 'function') g.refresh()
   }, [graphRef, nodeThreeObject, cleanData])
 
