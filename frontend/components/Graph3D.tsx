@@ -34,64 +34,68 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const graphRef = useRef<any>(null)
 
   const [CSS2D, setCSS2D] = useState<{ CSS2DRenderer: any; CSS2DObject: any } | null>(null)
-
   useEffect(() => {
     import('three/examples/jsm/renderers/CSS2DRenderer.js')
       .then(mod => setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject }))
       .catch(() => setCSS2D(null))
   }, [])
 
+  // Include a style token so the FG3D instance re-mounts with our custom node objects
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    return `g-${n}-${l}`
+    return `g-${n}-${l}-style_green_d3` // <- style token forces remount
   }, [data])
 
-  // Green color and 3.0 diameter
+  // Appearance: pure green, diameter 3
   const GREEN_HEX = 0x00ff00
   const DIAMETER = 3.0
-  const R = DIAMETER / 2 // 1.5 radius
+  const R = DIAMETER / 2 // 1.5
 
-  const nodeThreeObject = useCallback(
-    (n: any) => {
-      const group = new THREE.Group()
-      const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(R, 32, 32),
-        new THREE.MeshBasicMaterial({ color: GREEN_HEX })
-      )
-      group.add(sphere)
+  // Build our custom node (green, unlit) + optional CSS2D label
+  const nodeThreeObject = useCallback((n: any) => {
+    const group = new THREE.Group()
 
-      if (CSS2D?.CSS2DObject) {
-        const el = document.createElement('div')
-        el.textContent = String(n.name ?? n.id ?? '')
-        Object.assign(el.style, {
-          fontSize: '12px',
-          lineHeight: '1',
-          padding: '2px 6px',
-          borderRadius: '6px',
-          background: 'rgba(0,0,0,0.55)',
-          color: '#ffeaa7',
-          whiteSpace: 'nowrap',
-          userSelect: 'none',
-          pointerEvents: 'none'
-        } as CSSStyleDeclaration)
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(R, 32, 32),
+      // MeshBasicMaterial = unlit => exact color (no scene lights turning it blue)
+      new THREE.MeshBasicMaterial({ color: GREEN_HEX })
+    )
+    group.add(sphere)
 
-        const label = new CSS2D.CSS2DObject(el)
-        label.position.set(0, R * 2.2, 0)
-        group.add(label)
-      }
+    if (CSS2D?.CSS2DObject) {
+      const el = document.createElement('div')
+      el.textContent = String(n.name ?? n.id ?? '')
+      Object.assign(el.style, {
+        fontSize: '12px',
+        lineHeight: '1',
+        padding: '2px 6px',
+        borderRadius: '6px',
+        background: 'rgba(0,0,0,0.55)',
+        color: '#ffeaa7',
+        whiteSpace: 'nowrap',
+        userSelect: 'none',
+        pointerEvents: 'none'
+      } as CSSStyleDeclaration)
+      const label = new CSS2D.CSS2DObject(el)
+      label.position.set(0, R * 2.2, 0)
+      group.add(label)
+    }
 
-      return group
-    },
-    [CSS2D]
-  )
+    return group
+  }, [CSS2D])
 
+  // Sanitize input: remove any per-node `color` so it can't override green
   const cleanData = useMemo(() => {
-    const nodes = (data?.nodes ?? []).map((n: any, i: number) => ({
-      ...n,
-      id: String(n.id ?? n.name ?? `n-${i}`),
-      name: String(n.name ?? n.id ?? `n-${i}`)
-    }))
+    const nodes = (data?.nodes ?? []).map((n: any, i: number) => {
+      const { color: _dropColor, ...rest } = n || {}
+      return {
+        ...rest,
+        id: String(rest.id ?? rest.name ?? `n-${i}`),
+        name: String(rest.name ?? rest.id ?? `n-${i}`)
+      }
+    })
+
     const byId = new Map(nodes.map((n: any) => [n.id, n]))
     const links = (data?.links ?? [])
       .map((l: any) => {
@@ -101,6 +105,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         return { ...l, source: byId.get(s), target: byId.get(t) }
       })
       .filter(Boolean) as any[]
+
     return { nodes, links }
   }, [data])
 
@@ -113,15 +118,6 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     r.domElement.style.pointerEvents = 'none'
     return [r as unknown as THREE.Renderer]
   }, [CSS2D])
-
-  // Apply custom nodes before render initialization
-  useEffect(() => {
-    const g = graphRef.current
-    if (g) {
-      g.nodeThreeObject(nodeThreeObject)
-      g.nodeThreeObjectExtend(false)
-    }
-  }, [nodeThreeObject])
 
   const onNodeClick = useCallback((n: any) => {
     onNodeSelect?.(n)
@@ -146,9 +142,15 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         showNavInfo={false}
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
+
+        // CRITICAL: only our mesh, no default blue spheres
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
+
+        // Backstop (if FG3D ever falls back to defaults)
         nodeColor={() => '#00ff00'}
+
+        nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
           const t = String(l.target?.id || l.target)
