@@ -3,7 +3,9 @@
 import { useRef, useMemo, useCallback, useEffect, forwardRef } from 'react'
 import dynamic from 'next/dynamic'
 import * as THREE from 'three'
-import SpriteText from 'three-spritetext'
+
+// HTML labels (like the vasturiano example)
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 
 const ForceGraph3D = dynamic(
   () => import('react-force-graph-3d').then(m => m.default),
@@ -35,14 +37,13 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const fgRef = useRef<any>(null)
   const graphRef = (ref as any) || fgRef
 
-  // Force a clean remount when topology changes (prevents stale three objects)
+  // re-mount if topology changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
     return `g-${n}-${l}`
   }, [data])
 
-  // colors
   const getNodeColor = useCallback((n: any) => {
     const id = String(n.id)
     const whatIf = changedNodes.size > 0
@@ -53,10 +54,11 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return '#39ff14'
   }, [changedNodes, highlightedNodes, sourceNode, selectedNode])
 
-  // custom node: tiny sphere + screen-space label (always readable, drawn on top)
+  // sphere + HTML label (CSS2DObject)
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
+    // tiny sphere
     const r = 0.16
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(r, 16, 16),
@@ -68,32 +70,31 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     )
     group.add(sphere)
 
-    const label = new SpriteText(String(n.name ?? n.id ?? '')) as any
-    label.textHeight = 32                     // tweak to taste (e.g., 22–36)
-    label.color = '#ffeaa7'
-    label.backgroundColor = 'rgba(0,0,0,0.6)'
-    label.padding = 2
+    // HTML label
+    const el = document.createElement('div')
+    el.textContent = String(n.name ?? n.id ?? '')
+    el.className = 'rg-node-label'
 
-    if (label.material) {
-      // Some THREE versions don't expose sizeAttenuation; guard it.
-      // @ts-ignore
-      if ('sizeAttenuation' in label.material) label.material.sizeAttenuation = false
-      label.material.depthTest = false        // draw on top
-      label.material.depthWrite = false
-      label.material.transparent = true
-      label.material.opacity = 1
-      // @ts-ignore
-      if ('needsUpdate' in label.material) label.material.needsUpdate = true
-    }
-    label.renderOrder = 9999
-    label.frustumCulled = false               // don't cull near edges
-    label.position.set(0, r * 3.2, 0)         // above sphere
+    // inline styles so you don’t need a global css file
+    Object.assign(el.style, {
+      fontSize: '12px',
+      lineHeight: '1',
+      padding: '2px 6px',
+      borderRadius: '6px',
+      background: 'rgba(0,0,0,0.55)',
+      color: '#ffeaa7',
+      whiteSpace: 'nowrap',
+      userSelect: 'none',
+      pointerEvents: 'none' // let clicks go to the sphere
+    } as CSSStyleDeclaration)
 
+    const label = new CSS2DObject(el)
+    label.position.set(0, r * 3.2, 0) // above sphere
     group.add(label)
+
     return group
   }, [getNodeColor])
 
-  // normalize data
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => ({
       ...n,
@@ -112,12 +113,12 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // ensure our accessor is applied + force rebuild
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
     if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
-    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false)
+    // IMPORTANT: allow our custom object to extend the default node object
+    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(true)
     if (typeof g.refresh === 'function') g.refresh()
   }, [graphRef, nodeThreeObject, cleanData])
 
@@ -142,10 +143,11 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         graphData={cleanData}
         backgroundColor="#000011"
         showNavInfo={false}
-        // Disable log depth buffer to avoid SpriteText vanishing behind geometry
+        // the magic line: adds the HTML overlay renderer so labels are always visible
+        extraRenderers={[new CSS2DRenderer()]}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
         nodeThreeObject={nodeThreeObject}
-        nodeThreeObjectExtend={false}
+        nodeThreeObjectExtend={true}
         nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
