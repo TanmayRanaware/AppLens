@@ -41,10 +41,12 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   }, [])
 
   // Include a style token so the FG3D instance re-mounts with our custom node objects
+  // Bump STYLE token if you still see blue/default colors
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    return `g-${n}-${l}-style_green_d3` // <- style token forces remount
+    const STYLE = 'green_d3_r1.5'  // style token forces remount
+    return `g-${n}-${l}-${STYLE}`
   }, [data])
 
   // Appearance: pure green, diameter 3
@@ -108,6 +110,24 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
 
     return { nodes, links }
   }, [data])
+
+  // Nuclear option: Force rebuild of objects to clear old blue/default spheres
+  useEffect(() => {
+    const g = graphRef.current
+    if (!g || !cleanData.nodes.length) return
+
+    // Set custom node factory
+    if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
+    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false)
+
+    // Force rebuild: clear old objects then re-create with green material
+    g.graphData({ nodes: [], links: [] })
+    requestAnimationFrame(() => {
+      if (graphRef.current) {
+        graphRef.current.graphData(cleanData)
+      }
+    })
+  }, [nodeThreeObject, cleanData])
 
   const extraRenderers = useMemo(() => {
     if (!CSS2D?.CSS2DRenderer) return []
