@@ -33,130 +33,130 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
 ) {
   const graphRef = useRef<any>(null)
 
+  // Load CSS2D safely
   const [CSS2D, setCSS2D] = useState<{ CSS2DRenderer: any; CSS2DObject: any } | null>(null)
   useEffect(() => {
+    let mounted = true
     import('three/examples/jsm/renderers/CSS2DRenderer.js')
-      .then(mod => setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject }))
+      .then(mod => {
+        if (mounted) setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject })
+      })
       .catch(() => setCSS2D(null))
+    return () => { mounted = false }
   }, [])
 
-  // 🔸 SINGLE VARIABLE — update this to recolor BOTH nodes + labels
-  const NODE_COLOR = '#ff8c00' // example: '#ff4c4c'(red), '#4a90e2'(blue), '#19b45b'(green)
-  const NODE_COLOR_NUM = parseInt(NODE_COLOR.slice(1), 16)
+  // Color constants
+  const DEFAULT_COLOR = '#32cd32' // 🔹 light green (default)
+  const DEFAULT_COLOR_HEX = parseInt(DEFAULT_COLOR.replace('#', ''), 16)
+  const PRIMARY_COLOR = '#4a90e2' // 🔵 blue (primary affected service - where error occurred)
+  const PRIMARY_COLOR_HEX = parseInt(PRIMARY_COLOR.replace('#', ''), 16)
+  const DEPENDENT_COLOR = '#ff6b6b' // 🔴 red (dependent services - affected by error)
+  const DEPENDENT_COLOR_HEX = parseInt(DEPENDENT_COLOR.replace('#', ''), 16)
+  const R = 0.7
 
-  // Size
-  const DIAMETER = 3.0
-  const R = DIAMETER / 2
-
-  // Force remount if color/size changes
+  // re-mount key on data size change + highlight state changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    const STYLE = `unified_${NODE_COLOR}_d${DIAMETER}`
-    return `g-${n}-${l}-${STYLE}`
-  }, [data, NODE_COLOR, DIAMETER])
+    // Include highlight state to force remount when colors change
+    const primaryCount = sourceNode ? 1 : (changedNodes?.size ?? 0)
+    const dependentCount = highlightedNodes?.size ?? 0
+    const nodeIds = (data?.nodes ?? []).slice(0, 5).map((n: any) => n?.id || n?.name).join(',')
+    const linkIds = (data?.links ?? []).slice(0, 5).map((l: any) => `${l?.source?.id || l?.source}-${l?.target?.id || l?.target}`).join(',')
+    return `g-${n}-${l}-p${primaryCount}-d${dependentCount}-${nodeIds}-${linkIds}`
+  }, [data, sourceNode, changedNodes, highlightedNodes])
 
-  // Custom node (unlit → exact color)
+  // node shape + label with dynamic coloring
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
+    const nodeId = String(n?.id ?? n?.name ?? '')
+    
+    // Determine node color based on error analyzer state
+    let nodeColor = DEFAULT_COLOR_HEX
+    let labelColor = DEFAULT_COLOR
+    
+    // Primary affected service (where error occurred) - BLUE
+    if (sourceNode === nodeId || (changedNodes && changedNodes.has(nodeId))) {
+      nodeColor = PRIMARY_COLOR_HEX
+      labelColor = PRIMARY_COLOR
+      console.log('🎯 Node colored BLUE (primary):', nodeId, 'sourceNode:', sourceNode, 'changedNodes:', Array.from(changedNodes || []))
+    }
+    // Dependent services (affected by error) - RED
+    else if (highlightedNodes && highlightedNodes.has(nodeId)) {
+      nodeColor = DEPENDENT_COLOR_HEX
+      labelColor = DEPENDENT_COLOR
+      console.log('🔴 Node colored RED (dependent):', nodeId, 'highlightedNodes:', Array.from(highlightedNodes || []))
+    }
 
-    const mat = new THREE.MeshBasicMaterial({ color: NODE_COLOR_NUM })
-    ;(mat as any).toneMapped = false
-
-    const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, 32, 32), mat)
-    ;(sphere.material as THREE.MeshBasicMaterial).color.set(NODE_COLOR_NUM)
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(R, 32, 32),
+      new THREE.MeshBasicMaterial({ color: nodeColor })
+    )
+    ;(sphere.material as THREE.MeshBasicMaterial).toneMapped = false
     group.add(sphere)
 
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
-      el.style.cssText = `
-        font-size:12px; line-height:1; padding:2px 6px; border-radius:6px;
-        background:transparent !important;
-        color:${NODE_COLOR} !important;
-        -webkit-text-fill-color:${NODE_COLOR} !important;
-        text-shadow:none !important;
-        white-space:nowrap; user-select:none; pointer-events:none;
-      `
+      Object.assign(el.style, {
+        fontSize: '12px',
+        lineHeight: '1',
+        padding: '2px 6px',
+        borderRadius: '6px',
+        background: 'rgba(0,0,0,0.55)',
+        color: labelColor,          // label matches node color
+        whiteSpace: 'nowrap',
+        userSelect: 'none',
+        pointerEvents: 'none'
+      } as CSSStyleDeclaration)
       const label = new CSS2D.CSS2DObject(el)
-      label.position.set(0, R * 2.2, 0)
+      label.position.set(0, R * 3.2, 0)
       group.add(label)
     }
 
     return group
-  }, [CSS2D, NODE_COLOR, NODE_COLOR_NUM])
+  }, [CSS2D, sourceNode, changedNodes, highlightedNodes, R])
 
-  // Clean data (drop any incoming node.color)
+  // clean data
   const cleanData = useMemo(() => {
-    const nodes = (data?.nodes ?? []).map((n: any, i: number) => {
-      const { color: _drop, ...rest } = n || {}
-      return {
-        ...rest,
-        id: String(rest.id ?? rest.name ?? `n-${i}`),
-        name: String(rest.name ?? rest.id ?? `n-${i}`)
-      }
-    })
+    const nodes = (data?.nodes ?? []).map((n: any, i: number) => ({
+      ...n,
+      id: String(n?.id ?? n?.name ?? `n-${i}`),
+      name: String(n?.name ?? n?.id ?? `n-${i}`)
+    }))
     const byId = new Map(nodes.map((n: any) => [n.id, n]))
     const links = (data?.links ?? [])
       .map((l: any) => {
-        const s = String(l.source?.id ?? l.source)
-        const t = String(l.target?.id ?? l.target)
-        if (!byId.has(s) || !byId.has(t)) return null
+        const s = String(l?.source?.id ?? l?.source ?? '')
+        const t = String(l?.target?.id ?? l?.target ?? '')
+        if (!s || !t || !byId.has(s) || !byId.has(t)) return null
         return { ...l, source: byId.get(s), target: byId.get(t) }
       })
       .filter(Boolean) as any[]
     return { nodes, links }
   }, [data])
 
-  // Helper: hard-override all mesh colors in the scene
-  const forceSceneNodeColor = useCallback((gInst: any) => {
-    const scene: THREE.Scene | undefined = gInst?.scene?.()
-    if (!scene) return
-    scene.traverse(obj => {
-      const mesh = obj as any
-      const mat = mesh?.material
-      if (mesh?.isMesh && mat && mat.color) {
-        mat.color.set(NODE_COLOR)
-        if ('toneMapped' in mat) mat.toneMapped = false
-      }
-    })
-  }, [NODE_COLOR])
-
-  // Dispose helper (avoid stale materials)
-  const disposeSceneObjects = useCallback((gInst: any) => {
-    try {
-      const scene: THREE.Scene | undefined = gInst?.scene?.()
-      if (!scene) return
-      scene.traverse(obj => {
-        const mesh = obj as THREE.Mesh
-        const mat: any = (mesh as any).material
-        const geo: any = (mesh as any).geometry
-        if (mat) {
-          if (Array.isArray(mat)) mat.forEach(m => m?.dispose?.())
-          else mat?.dispose?.()
-        }
-        geo?.dispose?.()
-      })
-    } catch {}
-  }, [])
-
-  // Force rebuild + hard color override
+  // Force graph rebuild when highlight states change
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
 
+    console.log('🔄 Graph highlight state changed, forcing rebuild:', {
+      sourceNode,
+      changedNodes: Array.from(changedNodes || []),
+      highlightedNodes: Array.from(highlightedNodes || [])
+    })
+
+    // Force remount by clearing and resetting graph data
     g.nodeThreeObject(nodeThreeObject)
     g.nodeThreeObjectExtend(false)
-
-    disposeSceneObjects(g)
     g.graphData({ nodes: [], links: [] })
     requestAnimationFrame(() => {
-      if (!graphRef.current) return
-      graphRef.current.graphData(cleanData)
-      // one more frame later, force-set colors on any mesh that slipped through
-      requestAnimationFrame(() => forceSceneNodeColor(graphRef.current))
+      if (graphRef.current) {
+        graphRef.current.graphData(cleanData)
+      }
     })
-  }, [nodeThreeObject, cleanData, disposeSceneObjects, forceSceneNodeColor])
+  }, [nodeThreeObject, cleanData, sourceNode, changedNodes, highlightedNodes])
 
   const extraRenderers = useMemo(() => {
     if (!CSS2D?.CSS2DRenderer) return []
@@ -194,7 +194,21 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
 
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
-        nodeLabel={() => ''}  // we render CSS2D labels ourselves
+        nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
+        linkColor={(l: any) => {
+          // DO NOT change edge colors - always use default colors based on connection type
+          const kind = (l.kind || l.type || '').toString().toUpperCase()
+          return kind === 'KAFKA' ? '#ffd700' : '#ffffff' // Gold for Kafka, white for HTTP
+        }}
+        linkWidth={(l: any) => {
+          // DO NOT change edge width - always use default width
+          return 0.25
+        }}
+        linkOpacity={0.6}
+        d3AlphaDecay={0.02}
+        d3VelocityDecay={0.4}
+        cooldownTicks={200}
+        onNodeClick={onNodeClick}
       />
     </div>
   )

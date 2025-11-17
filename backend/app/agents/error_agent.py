@@ -126,6 +126,13 @@ class ErrorAgent:
                 available_services = [s[0] for s in available_services_result.all()]
                 available_services_list = "\n".join([f"  - {name}" for name in available_services[:20]])  # Show first 20
                 
+                # Build additional services text (avoiding backslash in f-string)
+                additional_services_text = ""
+                if len(available_services) > 20:
+                    additional_services_text = "\n  ... and " + str(len(available_services) - 20) + " more"
+                
+                debug_steps_text = analysis_result.get("debug_steps", "Review the error log and check service health endpoints")
+                
                 error_reasoning = f"""{clean_reasoning}
 
 GRAPH VISUALIZATION
@@ -140,13 +147,11 @@ To visualize the error impact:
 3. Try the error analyzer again
 
 Available services in database ({len(available_services)} total):
-{available_services_list if available_services else "  - No services found. Please run a scan first."}
-{f"\n  ... and {len(available_services) - 20} more" if len(available_services) > 20 else ""}
+{available_services_list if available_services else "  - No services found. Please run a scan first."}{additional_services_text}
 
 HOW TO FIX THE ERROR
 
-{analysis_result.get("debug_steps", "Review the error log and check service health endpoints")}
-"""
+{debug_steps_text}"""
                 
                 logger.warning(f"Service '{source_service_name}' not found in database. Available services: {available_services}")
                 return {
@@ -497,17 +502,19 @@ Recommended Actions:
             From this error log, identify:
             1. What is the error? (Describe the error clearly)
             2. Why has it occurred? (Root cause analysis)
-            3. Which service is the source of this error? (Service name where error occurred)
+            3. Which service is the source of this error? (CRITICAL: Return ONLY the exact service name where the error occurred, such as "user-service" or "order-service". Do NOT include words like "the" or "is" - just the service name itself like "user-service")
             4. How to debug it? (Step-by-step debugging approach)
             5. What endpoints or connections might be affected? (HTTP endpoints, Kafka topics mentioned)
             
             IMPORTANT: 
-            - Extract the exact service name where the error occurred (e.g., "user-service", "order-service")
+            - For question 3, return ONLY the service name in the format "service-name" (e.g., "user-service", "order-service", "cart-service")
+            - Do NOT write "the user-service" or "is user-service" - just write "user-service"
+            - Extract service names from the log text directly if mentioned (look for patterns like "user-service", "order-service", etc.)
             - Identify any HTTP endpoints mentioned (e.g., "/users/{{user_id}}/validate")
             - Identify any Kafka topics mentioned
             - Do NOT list all services in the system, only those directly mentioned or connected in the log
             
-            Format your response with clear sections.
+            Format your response with clear sections. For the service name, write it as: "Source service: user-service" (with the actual service name from the log).
             """,
             agent=self.agent,
         )
@@ -761,31 +768,58 @@ Recommended Actions:
     
     def _extract_service_from_analysis(self, analysis_text: str, log_text: str) -> Optional[str]:
         """Extract service name from CrewAI analysis or log text"""
+        # Common words to exclude from service name matches
+        common_words = {'the', 'is', 'are', 'was', 'were', 'a', 'an', 'this', 'that', 'which', 'where'}
+        
         # Try to extract from analysis text with improved patterns
+        # First, try direct log text extraction (more reliable)
+        service_names_from_log = self._extract_service_names(log_text)
+        if service_names_from_log:
+            # Prefer service names that contain "service" or have dashes
+            for name in service_names_from_log:
+                if 'service' in name or '-' in name:
+                    logger.info(f"Extracted service name from log text (preferred): {name}")
+                    return name
+            # Otherwise use the first one if it's valid
+            if service_names_from_log[0] not in common_words and len(service_names_from_log[0]) > 4:
+                logger.info(f"Extracted service name from log text: {service_names_from_log[0]}")
+                return service_names_from_log[0]
+        
+        # Then try patterns in analysis text
         patterns = [
-            r'source of this error is (?:the\s+)?[\'"]([a-z-]+(?:-service)?)[\'"]',
-            r'source service[:\s]+(?:is\s+)?[\'"]?([a-z-]+(?:-service)?)[\'"]?',
-            r'source service is (?:the\s+)?[\'"]?([a-z-]+(?:-service)?)[\'"]?',
-            r'service[:\s]+(?:is\s+)?[\'"]?([a-z-]+(?:-service)?)[\'"]?',
-            r'error occurred in[:\s]+(?:the\s+)?[\'"]?([a-z-]+(?:-service)?)[\'"]?',
-            r'source[:\s]+([a-z-]+(?:-service)?)',
+            r'source service[:\s]+([a-z][a-z-]*-service)',  # "Source service: user-service"
+            r'source of this error is (?:the\s+)?[\'"]([a-z][a-z-]*(?:-service)?)[\'"]',
+            r'source service[:\s]+(?:is\s+)?(?:the\s+)?[\'"]?([a-z][a-z-]*(?:-service)?)[\'"]?',
+            r'source service is (?:the\s+)?[\'"]?([a-z][a-z-]*(?:-service)?)[\'"]?',
+            r'error occurred in[:\s]+(?:the\s+)?[\'"]?([a-z][a-z-]*(?:-service)?)[\'"]?',
+            r'error originates? from[:\s]+(?:the\s+)?[\'"]?([a-z][a-z-]*(?:-service)?)[\'"]?',
             # Pattern to match "user-service" or "user_service" in quotes or after "is"
-            r'(?:is|are|the)\s+[\'"]?([a-z]+(?:[-_][a-z]+)*(?:-service|_service))[\'"]?',
+            r'(?:is|are|the)\s+[\'"]?([a-z][a-z]+(?:[-_][a-z]+)*(?:-service|_service))[\'"]?',
+            # Match service names that explicitly contain "service"
+            r'[\'"]([a-z][a-z-]*-service)[\'"]',
+            r'([a-z][a-z-]*-service)(?:\s|$|[,.])',
         ]
         
         for pattern in patterns:
             match = re.search(pattern, analysis_text, re.IGNORECASE)
             if match:
-                service_name = match.group(1)
-                logger.info(f"Extracted service name from analysis: {service_name}")
-                return service_name
+                service_name = match.group(1).strip().lower()
+                # Skip if it's a common word
+                if service_name in common_words or len(service_name) < 3:
+                    continue
+                # Prefer names that contain "service" or have at least one dash (e.g., "user-service")
+                if 'service' in service_name or '-' in service_name:
+                    logger.info(f"Extracted service name from analysis: {service_name}")
+                    return service_name
+                # Otherwise, only accept if it's longer than 4 chars (to avoid "the", "is", etc.)
+                if len(service_name) > 4:
+                    logger.info(f"Extracted service name from analysis: {service_name}")
+                    return service_name
         
-        logger.warning(f"Could not extract service name from analysis text. Trying log text extraction...")
-        # Fallback to log text extraction
-        service_names = self._extract_service_names(log_text)
-        if service_names:
-            logger.info(f"Extracted service name from log text: {service_names[0]}")
-            return service_names[0]
+        # If we still haven't found a good match from analysis, try log text again
+        if service_names_from_log:
+            logger.info(f"Using service name from log text (fallback): {service_names_from_log[0]}")
+            return service_names_from_log[0]
         
         logger.error(f"Could not extract service name from either analysis or log text")
         return None
@@ -800,20 +834,28 @@ Recommended Actions:
     
     def _extract_service_names(self, log_text: str) -> List[str]:
         """Extract service names from log text"""
+        common_words = {'the', 'is', 'are', 'was', 'were', 'a', 'an', 'this', 'that', 'which', 'where', 'error', 'log'}
         patterns = [
-            r'([a-z]+(?:-[a-z]+)+-service)',
-            r'([a-z]+_service)',
-            r'(service[:\s]+([a-z-]+))',
-            r'ERROR\s+([a-z-]+(?:-service)?)',
+            r'([a-z][a-z-]*-service)',  # Match "user-service", "order-service", etc.
+            r'([a-z][a-z-]*_service)',  # Match "user_service", etc.
+            r'service[:\s]+([a-z][a-z-]+)',  # Match "service: user" or "service user"
+            r'ERROR\s+([a-z][a-z-]*(?:-service)?)',
+            r'user-service|order-service|cart-service|inventory-service|payment-service|product-service|shipping-service|review-service|notification-service|recommendation-service',
         ]
         names = set()
         for pattern in patterns:
             matches = re.findall(pattern, log_text, re.IGNORECASE)
             for match in matches:
                 if isinstance(match, tuple):
-                    names.add(match[-1] if match[-1] else match[0])
+                    candidate = match[-1] if match[-1] else match[0]
                 else:
-                    names.add(match)
+                    candidate = match
+                candidate = candidate.strip().lower()
+                # Skip common words and very short names
+                if candidate not in common_words and len(candidate) > 3:
+                    # Prefer names with "service" or dashes
+                    if 'service' in candidate or '-' in candidate or len(candidate) > 6:
+                        names.add(candidate)
         return list(names)
     
     def _extract_urls(self, log_text: str) -> List[str]:

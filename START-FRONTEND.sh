@@ -1,4 +1,10 @@
 #!/bin/bash
-cd /Users/tanmayranaware/Desktop/Projects/RCA/frontend
-npm run dev
+cd "$(dirname "$0")/frontend"
 
+if [ ! -d "node_modules" ]; then
+    echo "📦 Installing frontend dependencies..."
+    npm install
+fi
+
+echo "🚀 Starting frontend..."
+npm run dev

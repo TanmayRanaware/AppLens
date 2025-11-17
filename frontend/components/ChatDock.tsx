@@ -96,7 +96,7 @@ export default function ChatDock({
           const primaryNode = response.data.primary_node || response.data.source_node
           if (primaryNode && onChangedNodes) {
             console.log('Setting primary node (error case):', primaryNode)
-            onChangedNodes(new Set([String(primaryNode)]))
+            onChangedNodes([String(primaryNode)])
           }
           if (primaryNode && onSourceNode) {
             onSourceNode(String(primaryNode))
@@ -104,40 +104,54 @@ export default function ChatDock({
         } else {
           // Set primary service (where error occurred) - BLUE
           const primaryNode = response.data.primary_node || response.data.source_node
-          if (primaryNode && onChangedNodes) {
-            console.log('Setting primary node:', primaryNode)
-            onChangedNodes(new Set([String(primaryNode)]))
+          const primaryNodeStr = primaryNode ? String(primaryNode) : null
+          console.log('🔵 Error Analyzer Response:', {
+            primaryNode,
+            primaryNodeStr,
+            primaryServiceName: response.data.primary_service_name || response.data.source_service_name,
+            dependentNodes: response.data.dependent_nodes || response.data.affected_nodes,
+            dependentNames: response.data.dependent_service_names || response.data.affected_service_names
+          })
+          
+          if (primaryNodeStr && onChangedNodes) {
+            console.log('🔵 Setting primary node (BLUE):', primaryNodeStr)
+            onChangedNodes([primaryNodeStr])
           }
           
           // Also set as source node for backward compatibility
-          if (primaryNode && onSourceNode) {
-            onSourceNode(String(primaryNode))
+          if (primaryNodeStr && onSourceNode) {
+            console.log('🔵 Setting source node:', primaryNodeStr)
+            onSourceNode(primaryNodeStr)
           }
           
           // Highlight dependent nodes (services impacted by error) - RED
           const dependentNodes = response.data.dependent_nodes || response.data.affected_nodes || []
-          console.log('Dependent nodes:', dependentNodes)
+          console.log('🔴 Raw dependent nodes:', dependentNodes)
           if (dependentNodes && Array.isArray(dependentNodes) && dependentNodes.length > 0) {
             const dependentNodeIds = dependentNodes.map((id: any) => String(id))
-            console.log('Highlighting dependent nodes:', dependentNodeIds)
+            console.log('🔴 Highlighting dependent nodes (RED):', dependentNodeIds)
             onHighlightNodes(dependentNodeIds)
           } else {
-            console.log('No dependent nodes found, clearing highlights')
+            console.log('⚠️ No dependent nodes found, clearing highlights')
             onHighlightNodes([])
           }
           
           // Highlight affected links/edges (between primary and dependent services) - RED
           const affectedEdges = response.data.affected_edges || []
-          console.log('Affected edges:', affectedEdges)
+          console.log('🔗 Raw affected edges from backend:', affectedEdges)
           if (affectedEdges && Array.isArray(affectedEdges) && affectedEdges.length > 0) {
             // Convert edges to link keys for highlighting
-            const linkKeys = affectedEdges.map((edge: any) => 
-              `${edge.source}-${edge.target}`
-            )
-            console.log('Highlighting links:', linkKeys)
+            // Format: "source_service_id-target_service_id"
+            const linkKeys = affectedEdges.map((edge: any) => {
+              const sourceId = String(edge.source || '')
+              const targetId = String(edge.target || '')
+              return `${sourceId}-${targetId}`
+            })
+            console.log('🔗 Highlighting links (keys):', linkKeys)
+            console.log('🔗 Sample edge:', affectedEdges[0], '→ Key:', linkKeys[0])
             onHighlightLinks(linkKeys)
           } else {
-            console.log('No affected edges found, clearing link highlights')
+            console.log('⚠️ No affected edges found, clearing link highlights')
             onHighlightLinks([])
           }
         }
@@ -226,12 +240,6 @@ export default function ChatDock({
       handleSend()
     }
   }
-
-  const quickActions = [
-    'Ask about available services',
-    'Request dependency analysis',
-    'Explore service connections'
-  ]
 
   return (
     <div className="h-full flex flex-col bg-slate-800" style={{ width: '100%', height: '100%', minWidth: '300px', zIndex: 10, display: 'flex' }}>
@@ -330,24 +338,6 @@ export default function ChatDock({
             </div>
           )
         })}
-
-        {/* Quick Actions (show when no messages or after assistant message) */}
-        {messages.length <= 1 && (
-          <div className="space-y-2">
-            {quickActions.map((action, index) => (
-              <button
-                key={index}
-                onClick={() => {
-                  setInput(action)
-                  inputRef.current?.focus()
-                }}
-                className="w-full text-left px-4 py-2 bg-slate-700/50 hover:bg-slate-700 text-gray-300 text-sm rounded border border-slate-600 transition-colors"
-              >
-                {action}
-              </button>
-            ))}
-          </div>
-        )}
 
         {loading && (
           <div className="flex justify-start">
