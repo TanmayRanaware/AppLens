@@ -44,35 +44,35 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    const STYLE = 'deepgreen_v3_label_samecolor' // bump this to invalidate caches
+    const STYLE = 'deepgreen_v4_label_samecolor_force'
     return `g-${n}-${l}-${STYLE}`
   }, [data])
 
   // Darker green + size
-  const NODE_COLOR_HEX_STR = '#0b5d1e'     // deep, darker green (string for CSS)
-  const NODE_COLOR_HEX_NUM = 0x0b5d1e      // same color (number for Three)
+  const NODE_COLOR_STR = '#083012'   // very dark green (label uses this exact CSS color)
+  const NODE_COLOR_NUM = 0x083012    // same color as number for Three.js
   const DIAMETER = 3.0
   const R = DIAMETER / 2 // 1.5
 
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
-    // Unlit material => exact color (scene lights won't tint it)
+    // Unlit: exact color (not affected by scene lights)
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(R, 32, 32),
-      new THREE.MeshBasicMaterial({ color: NODE_COLOR_HEX_NUM })
+      new THREE.MeshBasicMaterial({ color: NODE_COLOR_NUM })
     )
     group.add(sphere)
 
-    // Persistent CSS2D label, EXACT same color as node
+    // CSS2D label — EXACT same color, with !important to beat any overrides
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
-      // use cssText so we can include !important to beat any overrides
       el.style.cssText = `
         font-size:12px; line-height:1; padding:2px 6px; border-radius:6px;
-        background:rgba(0,0,0,0.55);
-        color:${NODE_COLOR_HEX_STR} !important;
+        background:transparent !important;
+        color:${NODE_COLOR_STR} !important;
+        text-shadow:none !important;
         white-space:nowrap; user-select:none; pointer-events:none;
       `
       const label = new CSS2D.CSS2DObject(el)
@@ -155,11 +155,11 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
 
-        // disable built-in hover label so you only see our CSS2D label
+        // hide built-in tooltip label; we use CSS2D label above
         nodeLabel={() => ''}
 
-        // backstop color if FG3D falls back to default spheres
-        nodeColor={() => NODE_COLOR_HEX_STR}
+        // backstop color if FG3D ever falls back to default spheres
+        nodeColor={() => NODE_COLOR_STR}
 
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
