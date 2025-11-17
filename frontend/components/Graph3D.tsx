@@ -21,7 +21,7 @@ interface Graph3DProps {
 
 const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   {
-    data, 
+    data,
     highlightedNodes = new Set(),
     highlightedLinks = new Set(),
     sourceNode,
@@ -36,26 +36,29 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
 
   const [CSS2D, setCSS2D] = useState<{ CSS2DRenderer: any; CSS2DObject: any } | null>(null)
 
-  // lazy-load CSS2D so the build doesn't need its types
+  // Load CSS2D only in the browser to avoid type/module resolution during build
   useEffect(() => {
     let mounted = true
     import('three/examples/jsm/renderers/CSS2DRenderer.js')
-      .then(mod => { if (mounted) setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject }) })
+      .then(mod => {
+        if (mounted) setCSS2D({ CSS2DRenderer: mod.CSS2DRenderer, CSS2DObject: mod.CSS2DObject })
+      })
       .catch(() => setCSS2D(null))
     return () => { mounted = false }
   }, [])
 
-  // re-mount if topology changes
+  // Re-mount key if topology size changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
     return `g-${n}-${l}`
   }, [data])
 
-  // sphere color logic (dark blue only)
-  const getNodeColor = useCallback(() => 0x0a2a6b, [])
+  // Single dark-blue color
+  const DARK_BLUE = 0x0a2a6b
+  const getNodeColor = useCallback(() => DARK_BLUE, [])
 
-  // sphere + HTML label (CSS2DObject)
+  // Custom sphere + optional HTML label
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
@@ -63,8 +66,8 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(r, 16, 16),
       new THREE.MeshPhongMaterial({
-        color: 0x0a2a6b,          // dark blue
-        emissive: 0x0a2a6b,       // same dark blue for glow
+        color: DARK_BLUE,
+        emissive: DARK_BLUE,
         emissiveIntensity: 0.35,
         specular: 0x111111,
         shininess: 25
@@ -72,7 +75,6 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     )
     group.add(sphere)
 
-    // only add HTML label once CSS2D is ready (client-side only)
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
@@ -89,7 +91,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       } as CSSStyleDeclaration)
 
       const label = new CSS2D.CSS2DObject(el)
-      label.position.set(0, r * 3.2, 0) // above sphere
+      label.position.set(0, r * 3.2, 0)
       group.add(label)
     }
 
@@ -118,8 +120,70 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
     if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
-    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false) // override default yellow nodes
+    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false) // disable default yellow mesh
     if (typeof g.refresh === 'function') g.refresh()
   }, [graphRef, nodeThreeObject, cleanData])
 
-  const o
+  const onNodeClick = useCallback((n: any) => {
+    onNodeSelect?.(n)
+    const dist = 90
+    const ratio = 1 + dist / Math.hypot(n.x || 0, n.y || 0, n.z || 0)
+    graphRef.current?.cameraPosition(
+      { x: (n.x || 0) * ratio, y: (n.y || 0) * ratio, z: (n.z || 0) * ratio },
+      n,
+      850
+    )
+    const controls = graphRef.current?.controls?.()
+    if (controls) controls.autoRotate = false
+  }, [onNodeSelect])
+
+  const extraRenderers = useMemo(() => {
+    if (!CSS2D?.CSS2DRenderer) return []
+    const r = new CSS2D.CSS2DRenderer()
+    r.domElement.style.position = 'absolute'
+    r.domElement.style.top = '0'
+    r.domElement.style.left = '0'
+    r.domElement.style.pointerEvents = 'none'
+    return [r as unknown as THREE.Renderer]
+  }, [CSS2D])
+
+  return (
+    <div className="relative w-full h-full" style={{ background: '#000011' }}>
+      <ForceGraph3D
+        key={graphKey}
+        ref={graphRef}
+        graphData={cleanData}
+        backgroundColor="#000011"
+        showNavInfo={false}
+        extraRenderers={extraRenderers}
+        rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
+        nodeThreeObject={nodeThreeObject}
+        nodeThreeObjectExtend={false}
+        nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
+        linkColor={(l: any) => {
+          const s = String(l.source?.id || l.source)
+          const t = String(l.target?.id || l.target)
+          const k = `${s}-${t}`, rk = `${t}-${s}`
+          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) || highlightedNodes.has(s) || highlightedNodes.has(t)
+          if (hi) return '#ff6b6b'
+          const kind = (l.kind || l.type || '').toString().toUpperCase()
+          return kind === 'KAFKA' ? '#ffd700' : '#ffffff'
+        }}
+        linkWidth={(l: any) => {
+          const s = String(l.source?.id || l.source)
+          const t = String(l.target?.id || l.target)
+          const k = `${s}-${t}`, rk = `${t}-${s}`
+          const hi = highlightedLinks.has(k) || highlightedLinks.has(rk) || highlightedNodes.has(s) || highlightedNodes.has(t)
+          return hi ? 0.18 : 0.25
+        }}
+        linkOpacity={0.6}
+        d3AlphaDecay={0.02}
+        d3VelocityDecay={0.4}
+        cooldownTicks={200}
+        onNodeClick={onNodeClick}
+      />
+    </div>
+  )
+})
+
+export default Graph3D
