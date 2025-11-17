@@ -40,38 +40,49 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       .catch(() => setCSS2D(null))
   }, [])
 
-  // Force remount when visuals change
+  // 🔸 SINGLE VARIABLE — change this to recolor BOTH nodes + labels
+  const NODE_COLOR = '#ff8c00' // try '#ff4c4c' (red), '#4a90e2' (blue), '#19b45b' (green)
+  // derive the numeric color for Three.js from the CSS hex
+  const NODE_COLOR_NUM = parseInt(NODE_COLOR.replace('#', ''), 16)
+
+  // Size
+  const DIAMETER = 3.0
+  const R = DIAMETER / 2
+
+  // Log once so you can verify the component actually updated
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log('Graph3D using node color ->', NODE_COLOR)
+  }, [NODE_COLOR])
+
+  // Force a remount when color/size changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    const STYLE = 'deepgreen_v4_label_samecolor_force'
+    const STYLE = `unified_${NODE_COLOR}_d${DIAMETER}`
     return `g-${n}-${l}-${STYLE}`
-  }, [data])
+  }, [data, NODE_COLOR, DIAMETER])
 
-  // Darker green + size
-  const NODE_COLOR_STR = '#083012'   // very dark green (label uses this exact CSS color)
-  const NODE_COLOR_NUM = 0x083012    // same color as number for Three.js
-  const DIAMETER = 3.0
-  const R = DIAMETER / 2 // 1.5
-
+  // Build node object: unlit so color is exact, toneMapped off to avoid renderer tweaks
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
-    // Unlit: exact color (not affected by scene lights)
-    const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(R, 32, 32),
-      new THREE.MeshBasicMaterial({ color: NODE_COLOR_NUM })
-    )
+    const material = new THREE.MeshBasicMaterial({ color: NODE_COLOR_NUM })
+    ;(material as any).toneMapped = false
+
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, 32, 32), material)
+    ;(sphere.material as THREE.MeshBasicMaterial).color.set(NODE_COLOR_NUM)
     group.add(sphere)
 
-    // CSS2D label — EXACT same color, with !important to beat any overrides
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
+      // strong inline CSS to defeat global overrides
       el.style.cssText = `
         font-size:12px; line-height:1; padding:2px 6px; border-radius:6px;
         background:transparent !important;
-        color:${NODE_COLOR_STR} !important;
+        color:${NODE_COLOR} !important;
+        -webkit-text-fill-color:${NODE_COLOR} !important;
         text-shadow:none !important;
         white-space:nowrap; user-select:none; pointer-events:none;
       `
@@ -81,9 +92,9 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     }
 
     return group
-  }, [CSS2D])
+  }, [CSS2D, NODE_COLOR, NODE_COLOR_NUM])
 
-  // Strip any incoming node.color so nothing overrides our color
+  // Strip per-node color so nothing overrides ours
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => {
       const { color: _drop, ...rest } = n || {}
@@ -105,7 +116,25 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // Nuclear hammer: blow away old meshes and rebuild them
+  // Dispose helper (clears stale meshes/materials)
+  const disposeSceneObjects = useCallback((gInst: any) => {
+    try {
+      const scene: THREE.Scene | undefined = gInst?.scene?.()
+      if (!scene) return
+      scene.traverse(obj => {
+        const mesh = obj as THREE.Mesh
+        const mat: any = (mesh as any).material
+        const geo: any = (mesh as any).geometry
+        if (mat) {
+          if (Array.isArray(mat)) mat.forEach(m => m?.dispose?.())
+          else mat?.dispose?.()
+        }
+        geo?.dispose?.()
+      })
+    } catch {}
+  }, [])
+
+  // Force rebuild so our color takes effect 100%
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
@@ -113,9 +142,12 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     g.nodeThreeObject(nodeThreeObject)
     g.nodeThreeObjectExtend(false)
 
+    disposeSceneObjects(g)
     g.graphData({ nodes: [], links: [] })
-    requestAnimationFrame(() => g.graphData(cleanData))
-  }, [nodeThreeObject, cleanData])
+    requestAnimationFrame(() => {
+      if (graphRef.current) graphRef.current.graphData(cleanData)
+    })
+  }, [nodeThreeObject, cleanData, disposeSceneObjects])
 
   const extraRenderers = useMemo(() => {
     if (!CSS2D?.CSS2DRenderer) return []
@@ -151,45 +183,14 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
 
-        // only our mesh
+        // use ONLY our meshes
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
 
-        // hide built-in tooltip label; we use CSS2D label above
+        // disable built-in tooltip label (we draw our own)
         nodeLabel={() => ''}
 
-        // backstop color if FG3D ever falls back to default spheres
-        nodeColor={() => NODE_COLOR_STR}
-
-        linkColor={(l: any) => {
-          const s = String(l.source?.id || l.source)
-          const t = String(l.target?.id || l.target)
-          const k = `${s}-${t}`, rk = `${t}-${s}`
-          const hi =
-            highlightedLinks.has(k) ||
-            highlightedLinks.has(rk) ||
-            highlightedNodes.has(s) ||
-            highlightedNodes.has(t)
-          if (hi) return '#ff6b6b'
-          const kind = (l.kind || l.type || '').toString().toUpperCase()
-          return kind === 'KAFKA' ? '#ffd700' : '#ffffff'
-        }}
-        linkWidth={(l: any) => {
-          const s = String(l.source?.id || l.source)
-          const t = String(l.target?.id || l.target)
-          const k = `${s}-${t}`, rk = `${t}-${s}`
-          const hi =
-            highlightedLinks.has(k) ||
-            highlightedLinks.has(rk) ||
-            highlightedNodes.has(s) ||
-            highlightedNodes.has(t)
-          return hi ? 0.18 : 0.25
-        }}
-        linkOpacity={0.6}
-        d3AlphaDecay={0.02}
-        d3VelocityDecay={0.4}
-        cooldownTicks={200}
-        onNodeClick={onNodeClick}
+        // no nodeColor prop — avoids library repainting defaults
       />
     </div>
   )

@@ -16,6 +16,54 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 
+def clean_text_for_chat(text: str) -> str:
+    """Remove emojis and extraneous characters to make text human-readable"""
+    if not text:
+        return text
+    
+    # Remove emojis using regex (covers most Unicode emoji ranges)
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\U00002702-\U000027B0"  # dingbats
+        "\U000024C2-\U0001F251"  # enclosed characters
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"  # chess symbols
+        "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+        "]+",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub('', text)
+    
+    # Remove excessive markdown formatting (keep basic structure)
+    # Remove triple backticks (code blocks) but keep content
+    text = re.sub(r'```[a-z]*\n?', '', text)
+    text = re.sub(r'```', '', text)
+    
+    # Remove excessive asterisks/bold formatting (keep single asterisks for emphasis if needed)
+    # Replace multiple asterisks with single space
+    text = re.sub(r'\*{2,}', ' ', text)
+    
+    # Remove excessive underscores
+    text = re.sub(r'_{2,}', ' ', text)
+    
+    # Clean up excessive whitespace
+    text = re.sub(r'\n{3,}', '\n\n', text)  # Max 2 consecutive newlines
+    text = re.sub(r' {2,}', ' ', text)  # Max 1 space between words
+    
+    # Remove leading/trailing whitespace from each line
+    lines = [line.strip() for line in text.split('\n')]
+    text = '\n'.join(lines)
+    
+    # Remove leading/trailing whitespace from entire text
+    text = text.strip()
+    
+    return text
+
+
 class NLQAgent:
     """Agent for processing natural language queries with CrewAI"""
     
@@ -66,18 +114,24 @@ class NLQAgent:
             if not answer or answer.startswith("I encountered an error"):
                 logger.warning(f"CrewAI returned error or empty answer: {answer}")
             
+            # Clean text to remove emojis and extraneous characters
+            clean_answer = clean_text_for_chat(answer)
+            
             return {
-                "message": answer,
-                "answer": answer,
+                "message": clean_answer,
+                "answer": clean_answer,
             }
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
             logger.error(f"Error in NLQ query: {e}\n{error_trace}", exc_info=True)
+            error_message = f"I encountered an error while processing your question: {str(e)}. Please try rephrasing it or check the backend logs for details."
+            clean_error = clean_text_for_chat(error_message)
+            
             return {
                 "error": f"Error processing query: {str(e)}",
-                "message": f"I encountered an error while processing your question: {str(e)}. Please try rephrasing it or check the backend logs for details.",
-                "answer": f"I encountered an error while processing your question: {str(e)}. Please try rephrasing it or check the backend logs for details.",
+                "message": clean_error,
+                "answer": clean_error,
             }
     
     async def _gather_context(self, question: str) -> Dict[str, Any]:
@@ -226,6 +280,9 @@ Answer the question directly and clearly. Format your response to be readable in
             except Exception as e:
                 logger.warning(f"Error formatting answer, using unformatted: {e}")
                 # Continue with unformatted answer if formatting fails
+            
+            # Clean text to remove emojis and extraneous characters
+            answer = clean_text_for_chat(answer)
             
             return answer
         except Exception as e:

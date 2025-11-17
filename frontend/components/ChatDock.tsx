@@ -28,8 +28,32 @@ export default function ChatDock({
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [toolMode, setToolMode] = useState<ToolMode>('chat')
+  const [expandedMessages, setExpandedMessages] = useState<Set<number>>(new Set())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  
+  // Truncate text to first 100 words
+  const truncateToWords = (text: string, wordLimit: number = 100): { truncated: string; isTruncated: boolean } => {
+    if (!text) return { truncated: '', isTruncated: false }
+    
+    const words = text.trim().split(/\s+/)
+    if (words.length <= wordLimit) {
+      return { truncated: text, isTruncated: false }
+    }
+    
+    const truncated = words.slice(0, wordLimit).join(' ') + '...'
+    return { truncated, isTruncated: true }
+  }
+  
+  const toggleMessage = (index: number) => {
+    const newExpanded = new Set(expandedMessages)
+    if (newExpanded.has(index)) {
+      newExpanded.delete(index)
+    } else {
+      newExpanded.add(index)
+    }
+    setExpandedMessages(newExpanded)
+  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -63,23 +87,59 @@ export default function ChatDock({
         // Error Analyzer: user pastes a log → agent detects implicated services/edges
         response = await api.post('/chat/error-analyzer', { log_text: userMessage })
         
-        // Set source node (where error occurred) - RED
-        if (response.data.source_node && onSourceNode) {
-          onSourceNode(String(response.data.source_node))
-        }
+        console.log('Error analyzer response:', response.data)
         
-        // Highlight affected nodes (services impacted by error) - YELLOW
-        if (response.data.affected_nodes && Array.isArray(response.data.affected_nodes)) {
-          onHighlightNodes(response.data.affected_nodes)
-        }
-        
-        // Highlight affected links/edges (between source and affected services) - RED
-        if (response.data.affected_edges && Array.isArray(response.data.affected_edges)) {
-          // Convert edges to link keys for highlighting
-          const linkKeys = response.data.affected_edges.map((edge: any) => 
-            `${edge.source}-${edge.target}`
-          )
-          onHighlightLinks(linkKeys)
+        // Check if there's an error (service not found, etc.)
+        if (response.data.error) {
+          console.warn('Error analyzer returned error:', response.data.error)
+          // Still try to set primary node if available
+          const primaryNode = response.data.primary_node || response.data.source_node
+          if (primaryNode && onChangedNodes) {
+            console.log('Setting primary node (error case):', primaryNode)
+            onChangedNodes(new Set([String(primaryNode)]))
+          }
+          if (primaryNode && onSourceNode) {
+            onSourceNode(String(primaryNode))
+          }
+        } else {
+          // Set primary service (where error occurred) - BLUE
+          const primaryNode = response.data.primary_node || response.data.source_node
+          if (primaryNode && onChangedNodes) {
+            console.log('Setting primary node:', primaryNode)
+            onChangedNodes(new Set([String(primaryNode)]))
+          }
+          
+          // Also set as source node for backward compatibility
+          if (primaryNode && onSourceNode) {
+            onSourceNode(String(primaryNode))
+          }
+          
+          // Highlight dependent nodes (services impacted by error) - RED
+          const dependentNodes = response.data.dependent_nodes || response.data.affected_nodes || []
+          console.log('Dependent nodes:', dependentNodes)
+          if (dependentNodes && Array.isArray(dependentNodes) && dependentNodes.length > 0) {
+            const dependentNodeIds = dependentNodes.map((id: any) => String(id))
+            console.log('Highlighting dependent nodes:', dependentNodeIds)
+            onHighlightNodes(dependentNodeIds)
+          } else {
+            console.log('No dependent nodes found, clearing highlights')
+            onHighlightNodes([])
+          }
+          
+          // Highlight affected links/edges (between primary and dependent services) - RED
+          const affectedEdges = response.data.affected_edges || []
+          console.log('Affected edges:', affectedEdges)
+          if (affectedEdges && Array.isArray(affectedEdges) && affectedEdges.length > 0) {
+            // Convert edges to link keys for highlighting
+            const linkKeys = affectedEdges.map((edge: any) => 
+              `${edge.source}-${edge.target}`
+            )
+            console.log('Highlighting links:', linkKeys)
+            onHighlightLinks(linkKeys)
+          } else {
+            console.log('No affected edges found, clearing link highlights')
+            onHighlightLinks([])
+          }
         }
       } else if (toolMode === 'what-if' || (toolMode === 'chat' && (userMessage.toLowerCase().includes('what if') || userMessage.toLowerCase().includes('impact') || userMessage.toLowerCase().includes('change')))) {
         // What-If Simulator: user describes a pre-deployment change → agent predicts blast radius
@@ -179,7 +239,7 @@ export default function ChatDock({
       <div className="p-4 border-b border-slate-700">
         <div className="flex items-center gap-2 mb-3">
           <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-          <h2 className="text-white font-semibold text-lg">AI Chat</h2>
+          <h2 className="text-white font-semibold text-lg">AppLens</h2>
         </div>
         
         {/* Tool Selection Tabs */}
@@ -233,27 +293,43 @@ export default function ChatDock({
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+        {messages.map((message, index) => {
+          const isExpanded = expandedMessages.has(index)
+          const { truncated, isTruncated } = truncateToWords(message.content, 100)
+          const displayContent = isExpanded || !isTruncated ? message.content : truncated
+          
+          return (
             <div
-              className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                message.role === 'user'
-                  ? 'bg-orange-600/20 text-orange-200 border border-orange-500/30'
-                  : 'bg-slate-700 text-white border border-slate-600'
-              }`}
+              key={index}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <div className="text-sm whitespace-pre-wrap">{message.content}</div>
-              <div className={`text-xs mt-1 ${
-                message.role === 'user' ? 'text-orange-300/60' : 'text-gray-400'
-              }`}>
-                {message.timestamp}
+              <div
+                className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                  message.role === 'user'
+                    ? 'bg-orange-600/20 text-orange-200 border border-orange-500/30'
+                    : 'bg-slate-700 text-white border border-slate-600'
+                }`}
+              >
+                <div className="text-sm whitespace-pre-wrap">{displayContent}</div>
+                {isTruncated && (
+                  <button
+                    onClick={() => toggleMessage(index)}
+                    className={`text-xs mt-2 underline hover:no-underline transition-all ${
+                      message.role === 'user' ? 'text-orange-300/80' : 'text-blue-400 hover:text-blue-300'
+                    }`}
+                  >
+                    {isExpanded ? 'Read less' : 'Read more'}
+                  </button>
+                )}
+                <div className={`text-xs mt-1 ${
+                  message.role === 'user' ? 'text-orange-300/60' : 'text-gray-400'
+                }`}>
+                  {message.timestamp}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         {/* Quick Actions (show when no messages or after assistant message) */}
         {messages.length <= 1 && (

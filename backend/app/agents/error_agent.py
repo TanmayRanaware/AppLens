@@ -15,6 +15,54 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 
+def clean_text_for_chat(text: str) -> str:
+    """Remove emojis and extraneous characters to make text human-readable"""
+    if not text:
+        return text
+    
+    # Remove emojis using regex (covers most Unicode emoji ranges)
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\U00002702-\U000027B0"  # dingbats
+        "\U000024C2-\U0001F251"  # enclosed characters
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"  # chess symbols
+        "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+        "]+",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub('', text)
+    
+    # Remove excessive markdown formatting (keep basic structure)
+    # Remove triple backticks (code blocks) but keep content
+    text = re.sub(r'```[a-z]*\n?', '', text)
+    text = re.sub(r'```', '', text)
+    
+    # Remove excessive asterisks/bold formatting (keep single asterisks for emphasis if needed)
+    # Replace multiple asterisks with single space
+    text = re.sub(r'\*{2,}', ' ', text)
+    
+    # Remove excessive underscores
+    text = re.sub(r'_{2,}', ' ', text)
+    
+    # Clean up excessive whitespace
+    text = re.sub(r'\n{3,}', '\n\n', text)  # Max 2 consecutive newlines
+    text = re.sub(r' {2,}', ' ', text)  # Max 1 space between words
+    
+    # Remove leading/trailing whitespace from each line
+    lines = [line.strip() for line in text.split('\n')]
+    text = '\n'.join(lines)
+    
+    # Remove leading/trailing whitespace from entire text
+    text = text.strip()
+    
+    return text
+
+
 class ErrorAgent:
     """Agent for analyzing error logs and identifying affected services"""
     
@@ -50,23 +98,77 @@ class ErrorAgent:
                 source_service_name = service_names[0] if service_names else None
             
             if not source_service_name:
+                raw_reasoning = analysis_result.get("analysis", "Analysis completed but no service identified")
+                clean_reasoning = clean_text_for_chat(raw_reasoning)
+                logger.warning("Could not identify source service from error log")
                 return {
                     "error": "Could not identify source service from error log",
-                    "reasoning": analysis_result.get("analysis", "Analysis completed but no service identified"),
+                    "primary_node": None,
+                    "source_node": None,
+                    "primary_service_name": None,
+                    "source_service_name": None,
+                    "dependent_nodes": [],
+                    "affected_nodes": [],
+                    "dependent_service_names": [],
+                    "affected_service_names": [],
+                    "affected_edges": [],
+                    "reasoning": clean_reasoning,
                 }
             
             # Step 3: Find source service in database
             source_service = await self._find_service_by_name(source_service_name)
             if not source_service:
+                raw_reasoning = analysis_result.get("analysis", "")
+                clean_reasoning = clean_text_for_chat(raw_reasoning)
+                
+                # Get list of available services for helpful error message
+                available_services_result = await self.db_session.execute(select(Service.name))
+                available_services = [s[0] for s in available_services_result.all()]
+                available_services_list = "\n".join([f"  - {name}" for name in available_services[:20]])  # Show first 20
+                
+                error_reasoning = f"""{clean_reasoning}
+
+GRAPH VISUALIZATION
+
+⚠️ SERVICE NOT FOUND IN DATABASE
+
+The error analyzer identified '{source_service_name}' as the primary service, but this service was not found in your database.
+
+To visualize the error impact:
+1. Go to the Dashboard and add repositories containing '{source_service_name}'
+2. Run a scan to populate services in the database
+3. Try the error analyzer again
+
+Available services in database ({len(available_services)} total):
+{available_services_list if available_services else "  - No services found. Please run a scan first."}
+{f"\n  ... and {len(available_services) - 20} more" if len(available_services) > 20 else ""}
+
+HOW TO FIX THE ERROR
+
+{analysis_result.get("debug_steps", "Review the error log and check service health endpoints")}
+"""
+                
+                logger.warning(f"Service '{source_service_name}' not found in database. Available services: {available_services}")
                 return {
                     "error": f"Service '{source_service_name}' not found in database",
-                    "reasoning": analysis_result.get("analysis", ""),
+                    "primary_node": None,
+                    "source_node": None,
+                    "primary_service_name": source_service_name,
+                    "source_service_name": source_service_name,
+                    "dependent_nodes": [],
+                    "affected_nodes": [],
+                    "dependent_service_names": [],
+                    "affected_service_names": [],
+                    "affected_edges": [],
+                    "reasoning": clean_text_for_chat(error_reasoning),
                 }
             
             source_service_id = str(source_service.id)
             logger.info(f"Found source service: {source_service_name} (ID: {source_service_id})")
             
-            # Step 4: Find connections from database
+            # Step 4: Find connections from database (services connected to primary service)
+            # Find all services that depend on the primary service (where primary is the target)
+            # These are services that CALL the primary service, so they will be affected if primary fails
             direct_connections = await self._find_connections_from_db(source_service_id)
             logger.info(f"Found {len(direct_connections)} direct connections from DB for {source_service_name}")
             if direct_connections:
@@ -84,12 +186,14 @@ class ErrorAgent:
             domino_connections = await self._find_domino_effects(direct_connections, source_service_id)
             
             # Step 7: Build result structure
-            all_affected_service_ids = set()
-            all_affected_edges = []
-            direct_affected_services = {}  # {service_id: {type, url, topic, reason}}
-            domino_affected_services = {}  # {service_id: {type, url, topic, reason, via_service}}
+            # Primary service = source_service_id (BLUE)
+            # Dependent services = services connected to primary (RED)
+            dependent_service_ids = set()
+            affected_edges = []  # Edges from primary to dependent services (RED)
+            direct_dependent_services = {}  # {service_id: {type, url, topic, reason}}
+            domino_dependent_services = {}  # {service_id: {type, url, topic, reason, via_service}}
             
-            # Direct connections
+            # Process direct connections - find services that depend on primary
             logger.info(f"Processing {len(direct_connections)} direct connections...")
             for conn in direct_connections:
                 conn_source = str(conn["source_service_id"])
@@ -98,17 +202,18 @@ class ErrorAgent:
                 conn_url = conn.get("url", "")
                 conn_topic = conn.get("topic", "")
                 
-                # If source_service is the target (other services call it), those callers are affected
-                # Example: cart-service calls user-service -> cart-service is affected
+                # Primary service is the target - services that CALL it are dependent/affected
+                # Example: cart-service calls user-service (primary) -> cart-service is dependent
                 if conn_target == source_service_id:
-                    affected_service_id = conn_source
-                    all_affected_service_ids.add(affected_service_id)
-                    all_affected_edges.append({
-                        "source": affected_service_id,  # Caller service (affected)
-                        "target": source_service_id,  # Source service (where error occurred)
+                    dependent_service_id = conn_source
+                    dependent_service_ids.add(dependent_service_id)
+                    # Edge from dependent service TO primary service
+                    affected_edges.append({
+                        "source": dependent_service_id,  # Dependent service (RED)
+                        "target": source_service_id,  # Primary service (BLUE)
                         "type": conn_type,
                     })
-                    direct_affected_services[affected_service_id] = {
+                    direct_dependent_services[dependent_service_id] = {
                         "type": conn_type,
                         "url": conn_url,
                         "topic": conn_topic,
@@ -116,19 +221,20 @@ class ErrorAgent:
                                  (f" (URL: {conn_url})" if conn_url else "") +
                                  (f" (Topic: {conn_topic})" if conn_topic else "")
                     }
-                    logger.info(f"  Marked service {affected_service_id} as affected (calls {source_service_id})")
+                    logger.info(f"  Marked service {dependent_service_id} as dependent (calls primary {source_service_id})")
                 
-                # If source_service is the source (it calls other services), those targets might be affected
-                # Example: user-service calls payment-service -> payment-service might be affected if user-service fails
+                # Primary service is the source - services it CALLS might also be affected if primary fails
+                # Example: user-service (primary) calls payment-service -> payment-service is dependent
                 elif conn_source == source_service_id:
-                    affected_service_id = conn_target
-                    all_affected_service_ids.add(affected_service_id)
-                    all_affected_edges.append({
-                        "source": source_service_id,  # Source service (where error occurred)
-                        "target": affected_service_id,  # Target service (might be affected)
+                    dependent_service_id = conn_target
+                    dependent_service_ids.add(dependent_service_id)
+                    # Edge from primary service TO dependent service
+                    affected_edges.append({
+                        "source": source_service_id,  # Primary service (BLUE)
+                        "target": dependent_service_id,  # Dependent service (RED)
                         "type": conn_type,
                     })
-                    direct_affected_services[affected_service_id] = {
+                    direct_dependent_services[dependent_service_id] = {
                         "type": conn_type,
                         "url": conn_url,
                         "topic": conn_topic,
@@ -136,24 +242,25 @@ class ErrorAgent:
                                  (f" (URL: {conn_url})" if conn_url else "") +
                                  (f" (Topic: {conn_topic})" if conn_topic else "")
                     }
-                    logger.info(f"  Marked service {affected_service_id} as affected (called by {source_service_id})")
+                    logger.info(f"  Marked service {dependent_service_id} as dependent (called by primary {source_service_id})")
             
-            logger.info(f"Total affected services after direct connections: {len(all_affected_service_ids)}")
+            logger.info(f"Total dependent services after direct connections: {len(dependent_service_ids)}")
             
-            # Domino connections
+            # Process domino connections - services affected through dependent services
             for conn in domino_connections:
                 try:
-                    affected_service_id = str(conn.get("target_service_id", ""))
+                    dependent_service_id = str(conn.get("target_service_id", ""))
                     source_id = str(conn.get("source_service_id", ""))
                     conn_type = conn.get("type", "HTTP")
                     conn_url = conn.get("url", "")
                     conn_topic = conn.get("topic", "")
                     
-                    if affected_service_id and source_id:
-                        all_affected_service_ids.add(affected_service_id)
-                        all_affected_edges.append({
+                    if dependent_service_id and source_id and dependent_service_id != source_service_id:
+                        dependent_service_ids.add(dependent_service_id)
+                        # Edge from source service TO dependent service (through cascade)
+                        affected_edges.append({
                             "source": source_id,
-                            "target": affected_service_id,
+                            "target": dependent_service_id,
                             "type": conn_type,
                         })
                         # Find the name of the service that connects to this one (for domino explanation)
@@ -168,7 +275,7 @@ class ErrorAgent:
                         except:
                             pass
                         
-                        domino_affected_services[affected_service_id] = {
+                        domino_dependent_services[dependent_service_id] = {
                             "type": conn_type,
                             "url": conn_url,
                             "topic": conn_topic,
@@ -182,23 +289,23 @@ class ErrorAgent:
                     continue
             
             # Get service names and build service ID to name mapping
-            affected_service_names = []
+            dependent_service_names = []
             service_id_to_name = {}
-            # Add source service to mapping
+            # Add primary service to mapping
             service_id_to_name[source_service_id] = source_service_name
-            if all_affected_service_ids:
+            if dependent_service_ids:
                 # Convert string UUIDs to UUID objects
                 try:
-                    uuid_ids = [uuid.UUID(id) for id in all_affected_service_ids]
+                    uuid_ids = [uuid.UUID(id) for id in dependent_service_ids]
                     result = await self.db_session.execute(
                         select(Service).where(Service.id.in_(uuid_ids))
                     )
                     services = result.scalars().all()
-                    affected_service_names = [s.name for s in services]
+                    dependent_service_names = [s.name for s in services]
                     service_id_to_name.update({str(s.id): s.name for s in services})
                 except (ValueError, TypeError) as e:
-                    logger.error(f"Error converting service IDs to UUIDs: {e}, IDs: {all_affected_service_ids}")
-                    affected_service_names = []
+                    logger.error(f"Error converting service IDs to UUIDs: {e}, IDs: {dependent_service_ids}")
+                    dependent_service_names = []
             
             # Helper function to format URLs for display (truncate if too long)
             def format_url(url: str, max_length: int = 45) -> str:
@@ -241,13 +348,13 @@ class ErrorAgent:
             
             # Build detailed proof section
             proof_section = ""
-            if affected_service_names:
-                proof_section = "\nDETAILED PROOF OF AFFECTED SERVICES\n\n"
+            if dependent_service_names:
+                proof_section = "\nDETAILED PROOF OF DEPENDENT SERVICES\n\n"
                 
                 # Direct connections
-                if direct_affected_services:
-                    proof_section += "Direct Connections (Immediate Impact):\n\n"
-                    for service_id, details in direct_affected_services.items():
+                if direct_dependent_services:
+                    proof_section += "Direct Dependencies (Immediate Impact):\n\n"
+                    for service_id, details in direct_dependent_services.items():
                         service_name = service_id_to_name.get(service_id, f"Service {service_id[:8]}...")
                         proof_section += f"{service_name}\n"
                         proof_section += f"  - Connection Type: {details['type']}\n"
@@ -257,15 +364,15 @@ class ErrorAgent:
                         if details.get('topic'):
                             proof_section += f"  - Kafka Topic: {details['topic']}\n"
                         if "Calls" in details['reason']:
-                            proof_section += f"  - Impact: Calls {source_service_name}. If {source_service_name} fails, {service_name} cannot complete operations that depend on it.\n"
+                            proof_section += f"  - Impact: {service_name} calls {source_service_name}. If {source_service_name} fails, {service_name} cannot complete operations that depend on it.\n"
                         else:
-                            proof_section += f"  - Impact: Called by {source_service_name}. If {source_service_name} fails, {service_name} may not receive expected calls or events.\n"
+                            proof_section += f"  - Impact: {service_name} is called by {source_service_name}. If {source_service_name} fails, {service_name} may not receive expected calls or events.\n"
                         proof_section += "\n"
                 
                 # Domino effects
-                if domino_affected_services:
+                if domino_dependent_services:
                     proof_section += "Domino Effects (Cascading Impact):\n\n"
-                    for service_id, details in domino_affected_services.items():
+                    for service_id, details in domino_dependent_services.items():
                         service_name = service_id_to_name.get(service_id, f"Service {service_id[:8]}...")
                         via_service = details.get('via_service', 'another service')
                         proof_section += f"{service_name}\n"
@@ -279,10 +386,10 @@ class ErrorAgent:
                         proof_section += f"  - Impact: Since {via_service} is affected by {source_service_name}, {service_name} is also impacted through the dependency chain.\n"
                         proof_section += "\n"
             
-            # Build connections list with service names
+            # Build connections list with service names (edges from primary to dependent)
             connections_list_formatted = ""
-            if all_affected_edges:
-                for edge in all_affected_edges[:15]:  # Show up to 15 connections
+            if affected_edges:
+                for edge in affected_edges[:15]:  # Show up to 15 connections
                     source_name = service_id_to_name.get(str(edge['source']), f"Service {str(edge['source'])[:8]}...")
                     target_name = service_id_to_name.get(str(edge['target']), f"Service {str(edge['target'])[:8]}...")
                     if edge['source'] == source_service_id:
@@ -290,51 +397,75 @@ class ErrorAgent:
                     if edge['target'] == source_service_id:
                         target_name = source_service_name
                     connections_list_formatted += f"  - {source_name} -> {target_name} ({edge.get('type', 'HTTP')})\n"
-                if len(all_affected_edges) > 15:
-                    connections_list_formatted += f"  - ... and {len(all_affected_edges) - 15} more connection(s)\n"
+                if len(affected_edges) > 15:
+                    connections_list_formatted += f"  - ... and {len(affected_edges) - 15} more connection(s)\n"
             
             # Build clean, non-duplicated reasoning
-            # Always include GRAPH VISUALIZATION section
-            reasoning = f"""{analysis_result.get("analysis", "Analysis completed")}
+            # Extract error description from analysis
+            raw_analysis = analysis_result.get("analysis", "Analysis completed")
+            raw_debug_steps = analysis_result.get("debug_steps", "Review the error log and check service health endpoints")
+            
+            # Extract error description (first part of analysis before detailed sections)
+            error_description = raw_analysis.split("\n\n")[0] if "\n\n" in raw_analysis else raw_analysis.split("\n")[0] if "\n" in raw_analysis else raw_analysis
+            
+            reasoning = f"""ERROR ANALYSIS
 
-GRAPH VISUALIZATION
+{error_description}
 
-Source Service (RED Node):
+PRIMARY AFFECTED SERVICE (BLUE NODE):
 {source_service_name} (Service ID: {source_service_id})
 
-The error log identifies {source_service_name} as where the error occurred. This service is marked RED in the graph.
+The error log identifies {source_service_name} as the primary service where the error occurred. This service is marked BLUE in the graph to indicate it is the source of the error.
 
-Affected Services (GOLDEN Nodes):
-Total: {len(affected_service_names)} service(s) affected
+DEPENDENT SERVICES (RED NODES):
+Total: {len(dependent_service_names)} service(s) affected
 
 Services:
-{chr(10).join([f"  - {name}" for name in affected_service_names]) if affected_service_names else "  - None found - No services are directly or indirectly affected by this error."}
+{chr(10).join([f"  - {name}" for name in dependent_service_names]) if dependent_service_names else "  - None found - No services are directly or indirectly dependent on the primary service."}
 
 Breakdown:
-  - Direct connections: {len(direct_affected_services)} service(s) - Immediate dependencies on {source_service_name}
-  - Domino effects: {len(domino_affected_services)} service(s) - Affected through cascading dependencies
+  - Direct dependencies: {len(direct_dependent_services)} service(s) - Services directly connected to {source_service_name}
+  - Domino effects: {len(domino_dependent_services)} service(s) - Services affected through cascading dependencies
 
-{("These services are marked GOLDEN because they are directly or indirectly affected by the error." if affected_service_names else "No services are affected by this error. The error is isolated to " + source_service_name + ".")}
+{"These services are marked RED because they depend on " + source_service_name + " and will be impacted if the error is not fixed." if dependent_service_names else "No services depend on " + source_service_name + ". The error is isolated to the primary service."}
 
-Affected Connections (RED Edges):
-Total: {len(all_affected_edges)} connection(s) affected
+AFFECTED CONNECTIONS (RED EDGES):
+Total: {len(affected_edges)} connection(s) affected
 
 {connections_list_formatted if connections_list_formatted else "  - No connections found - No service interactions are affected by this error."}
 
-{proof_section if proof_section else ""}
-HOW TO DEBUG
+These edges connect the primary service to dependent services and are marked RED to show the blast radius of potential impact.
 
-{analysis_result.get("debug_steps", "Review the error log and check service health endpoints")}
+{proof_section if proof_section else ""}
+
+HOW TO FIX THE ERROR
+
+{raw_debug_steps}
+
+Recommended Actions:
+1. Review the error in {source_service_name} and identify the root cause
+2. Check the health and logs of dependent services to assess current impact
+3. Fix the error in {source_service_name} to prevent further cascading failures
+4. Monitor dependent services after the fix to ensure they recover properly
+5. Consider implementing circuit breakers or retry mechanisms for dependent services
 """
             
+            # Clean text to remove emojis and extraneous characters
+            clean_reasoning = clean_text_for_chat(reasoning)
+            clean_analysis = clean_text_for_chat(raw_analysis)
+            
             return {
-                "source_node": source_service_id,  # RED
+                "primary_node": source_service_id,  # BLUE - primary affected service
+                "primary_service_name": source_service_name,
+                "source_node": source_service_id,  # Keep for backward compatibility
                 "source_service_name": source_service_name,
-                "affected_nodes": list(all_affected_service_ids),  # GOLDEN (direct + domino)
-                "affected_service_names": affected_service_names,
-                "affected_edges": all_affected_edges,  # RED
-                "reasoning": reasoning,
-                "analysis": analysis_result.get("analysis", ""),
+                "affected_nodes": list(dependent_service_ids),  # RED - dependent services
+                "affected_service_names": dependent_service_names,
+                "dependent_nodes": list(dependent_service_ids),  # RED - dependent services
+                "dependent_service_names": dependent_service_names,
+                "affected_edges": affected_edges,  # RED - edges from primary to dependent
+                "reasoning": clean_reasoning,
+                "analysis": clean_analysis,
                 "confidence": 0.8,
             }
         except Exception as e:
@@ -343,9 +474,12 @@ HOW TO DEBUG
             error_trace = traceback.format_exc()
             logger.error(f"Full traceback: {error_trace}")
             # Return error response with more details
+            error_reasoning = f"An error occurred while analyzing the error log.\n\nError: {str(e)}\n\nPlease check the backend logs for full details."
+            clean_error_reasoning = clean_text_for_chat(error_reasoning)
+            
             return {
                 "error": f"Error analyzing log: {str(e)}",
-                "reasoning": f"An error occurred while analyzing the error log.\n\nError: {str(e)}\n\nPlease check the backend logs for full details.",
+                "reasoning": clean_error_reasoning,
                 "source_node": None,
                 "affected_nodes": [],
                 "affected_edges": [],

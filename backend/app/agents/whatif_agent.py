@@ -23,6 +23,54 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 
+def clean_text_for_chat(text: str) -> str:
+    """Remove emojis and extraneous characters to make text human-readable"""
+    if not text:
+        return text
+    
+    # Remove emojis using regex (covers most Unicode emoji ranges)
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\U00002702-\U000027B0"  # dingbats
+        "\U000024C2-\U0001F251"  # enclosed characters
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"  # chess symbols
+        "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+        "]+",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub('', text)
+    
+    # Remove excessive markdown formatting (keep basic structure)
+    # Remove triple backticks (code blocks) but keep content
+    text = re.sub(r'```[a-z]*\n?', '', text)
+    text = re.sub(r'```', '', text)
+    
+    # Remove excessive asterisks/bold formatting (keep single asterisks for emphasis if needed)
+    # Replace multiple asterisks with single space
+    text = re.sub(r'\*{2,}', ' ', text)
+    
+    # Remove excessive underscores
+    text = re.sub(r'_{2,}', ' ', text)
+    
+    # Clean up excessive whitespace
+    text = re.sub(r'\n{3,}', '\n\n', text)  # Max 2 consecutive newlines
+    text = re.sub(r' {2,}', ' ', text)  # Max 1 space between words
+    
+    # Remove leading/trailing whitespace from each line
+    lines = [line.strip() for line in text.split('\n')]
+    text = '\n'.join(lines)
+    
+    # Remove leading/trailing whitespace from entire text
+    text = text.strip()
+    
+    return text
+
+
 class WhatIfAgent:
     """Agent for simulating impact of code changes and predicting blast radius"""
     
@@ -86,9 +134,11 @@ class WhatIfAgent:
                 changed_service_names = self._extract_service_names(change_description)
             
             if not changed_service_names:
+                raw_reasoning = analysis_result.get("analysis", "Analysis completed but no services identified")
+                clean_reasoning = clean_text_for_chat(raw_reasoning)
                 return {
                     "error": "Could not identify changed services from the change description",
-                    "reasoning": analysis_result.get("analysis", "Analysis completed but no services identified"),
+                    "reasoning": clean_reasoning,
                 }
             
             logger.info(f"Identified changed services: {changed_service_names}")
@@ -101,9 +151,11 @@ class WhatIfAgent:
                     changed_services.append(service)
             
             if not changed_services:
+                raw_reasoning = analysis_result.get("analysis", "")
+                clean_reasoning = clean_text_for_chat(raw_reasoning)
                 return {
                     "error": f"Changed services {changed_service_names} not found in database",
-                    "reasoning": analysis_result.get("analysis", ""),
+                    "reasoning": clean_reasoning,
                 }
             
             # Step 4: Find blast radius
@@ -272,6 +324,9 @@ class WhatIfAgent:
                 service_id_to_name,
             )
             
+            raw_analysis = analysis_result.get("analysis", "")
+            clean_analysis = clean_text_for_chat(raw_analysis)
+            
             return {
                 "changed_services": changed_service_names_list,
                 "changed_service_ids": [str(s.id) for s in changed_services],
@@ -280,8 +335,8 @@ class WhatIfAgent:
                 "blast_radius_edges": blast_radius_edges,
                 "risk_hotspot_nodes": list(risk_hotspot_nodes),
                 "risk_hotspot_service_names": risk_hotspot_service_names,
-                "reasoning": reasoning,
-                "analysis": analysis_result.get("analysis", ""),
+                "reasoning": reasoning,  # Already cleaned in _build_reasoning
+                "analysis": clean_analysis,
                 "confidence": 0.8,
             }
         except Exception as e:
@@ -289,9 +344,12 @@ class WhatIfAgent:
             import traceback
             error_trace = traceback.format_exc()
             logger.error(f"Full traceback: {error_trace}")
+            error_reasoning = f"An error occurred while analyzing the change.\n\nError: {str(e)}\n\nPlease check the backend logs for full details."
+            clean_error_reasoning = clean_text_for_chat(error_reasoning)
+            
             return {
                 "error": f"Error analyzing change: {str(e)}",
-                "reasoning": f"An error occurred while analyzing the change.\n\nError: {str(e)}\n\nPlease check the backend logs for full details.",
+                "reasoning": clean_error_reasoning,
                 "changed_services": [],
                 "blast_radius_nodes": [],
                 "risk_hotspot_nodes": [],
@@ -851,7 +909,9 @@ class WhatIfAgent:
                 risk_hotspot_proof += f"  - Outgoing Connections: {details.get('outgoing_connections', 0)}\n"
                 risk_hotspot_proof += f"  - Why Risk Hotspot: {details['reason']}\n\n"
         
-        reasoning = f"""{analysis_result.get("analysis", "Analysis completed")}
+        raw_analysis = analysis_result.get("analysis", "Analysis completed")
+        
+        reasoning = f"""{raw_analysis}
 
 GRAPH VISUALIZATION
 
@@ -892,4 +952,7 @@ HOW TO MITIGATE RISK
 5. Have rollback plan ready for critical changes
 """
         
-        return reasoning
+        # Clean text to remove emojis and extraneous characters
+        clean_reasoning = clean_text_for_chat(reasoning)
+        
+        return clean_reasoning

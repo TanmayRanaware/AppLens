@@ -122,13 +122,7 @@ export default function GraphPage() {
   }, [])
 
   const [selectedNode, setSelectedNode] = useState<any>(null)
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }>>([
-    {
-      role: 'assistant',
-      content: 'Connected to CrewAI Chat! I can help you explore and analyze your microservice dependencies.',
-      timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-    }
-  ])
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }>>([])
 
   const handleNodeSelect = useCallback((node: any) => {
     setSelectedNode(node)
