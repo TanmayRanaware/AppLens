@@ -40,42 +40,41 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
       .catch(() => setCSS2D(null))
   }, [])
 
+  // Force remount when visuals change
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
-    const STYLE = 'deepgreen_diam3_labelmatch'
+    const STYLE = 'deepgreen_v3_label_samecolor' // bump this to invalidate caches
     return `g-${n}-${l}-${STYLE}`
   }, [data])
 
-  // Darker green tone and larger nodes
-  const DARKER_GREEN_HEX = 0x004d1a // deep forest green
+  // Darker green + size
+  const NODE_COLOR_HEX_STR = '#0b5d1e'     // deep, darker green (string for CSS)
+  const NODE_COLOR_HEX_NUM = 0x0b5d1e      // same color (number for Three)
   const DIAMETER = 3.0
-  const R = DIAMETER / 2 // radius = 1.5
+  const R = DIAMETER / 2 // 1.5
 
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
+    // Unlit material => exact color (scene lights won't tint it)
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(R, 32, 32),
-      new THREE.MeshBasicMaterial({ color: DARKER_GREEN_HEX }) // unlit darker green
+      new THREE.MeshBasicMaterial({ color: NODE_COLOR_HEX_NUM })
     )
     group.add(sphere)
 
-    // Label with same color as node
+    // Persistent CSS2D label, EXACT same color as node
     if (CSS2D?.CSS2DObject) {
       const el = document.createElement('div')
       el.textContent = String(n.name ?? n.id ?? '')
-      Object.assign(el.style, {
-        fontSize: '12px',
-        lineHeight: '1',
-        padding: '2px 6px',
-        borderRadius: '6px',
-        background: 'rgba(0,0,0,0.55)',
-        color: '#004d1a', // exact same as node color
-        whiteSpace: 'nowrap',
-        userSelect: 'none',
-        pointerEvents: 'none'
-      } as CSSStyleDeclaration)
+      // use cssText so we can include !important to beat any overrides
+      el.style.cssText = `
+        font-size:12px; line-height:1; padding:2px 6px; border-radius:6px;
+        background:rgba(0,0,0,0.55);
+        color:${NODE_COLOR_HEX_STR} !important;
+        white-space:nowrap; user-select:none; pointer-events:none;
+      `
       const label = new CSS2D.CSS2DObject(el)
       label.position.set(0, R * 2.2, 0)
       group.add(label)
@@ -84,6 +83,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return group
   }, [CSS2D])
 
+  // Strip any incoming node.color so nothing overrides our color
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => {
       const { color: _drop, ...rest } = n || {}
@@ -105,18 +105,16 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
-  // Force rebuild to ensure colors refresh
+  // Nuclear hammer: blow away old meshes and rebuild them
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
 
-    if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
-    if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(false)
+    g.nodeThreeObject(nodeThreeObject)
+    g.nodeThreeObjectExtend(false)
 
     g.graphData({ nodes: [], links: [] })
-    requestAnimationFrame(() => {
-      if (graphRef.current) graphRef.current.graphData(cleanData)
-    })
+    requestAnimationFrame(() => g.graphData(cleanData))
   }, [nodeThreeObject, cleanData])
 
   const extraRenderers = useMemo(() => {
@@ -152,10 +150,17 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         showNavInfo={false}
         extraRenderers={extraRenderers}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
+
+        // only our mesh
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
-        nodeColor={() => '#004d1a'} // backstop
-        nodeLabel={(n: any) => String(n.name ?? n.id ?? '')}
+
+        // disable built-in hover label so you only see our CSS2D label
+        nodeLabel={() => ''}
+
+        // backstop color if FG3D falls back to default spheres
+        nodeColor={() => NODE_COLOR_HEX_STR}
+
         linkColor={(l: any) => {
           const s = String(l.source?.id || l.source)
           const t = String(l.target?.id || l.target)
