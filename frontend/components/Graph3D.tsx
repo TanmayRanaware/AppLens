@@ -3,9 +3,7 @@
 import { useRef, useMemo, useCallback, useEffect, forwardRef } from 'react'
 import dynamic from 'next/dynamic'
 import * as THREE from 'three'
-
-// HTML labels (like the vasturiano example)
-import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer' // TS path (no .js)
 
 const ForceGraph3D = dynamic(
   () => import('react-force-graph-3d').then(m => m.default),
@@ -37,13 +35,24 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const fgRef = useRef<any>(null)
   const graphRef = (ref as any) || fgRef
 
-  // re-mount if topology changes
+  // Re-mount if topology changes
   const graphKey = useMemo(() => {
     const n = (data?.nodes ?? []).length
     const l = (data?.links ?? []).length
     return `g-${n}-${l}`
   }, [data])
 
+  // Create CSS2D renderer once (overlay for HTML labels)
+  const css2d = useMemo(() => {
+    const r = new CSS2DRenderer()
+    r.domElement.style.position = 'absolute'
+    r.domElement.style.top = '0'
+    r.domElement.style.left = '0'
+    r.domElement.style.pointerEvents = 'none'
+    return r
+  }, [])
+
+  // colors
   const getNodeColor = useCallback((n: any) => {
     const id = String(n.id)
     const whatIf = changedNodes.size > 0
@@ -58,7 +67,6 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
   const nodeThreeObject = useCallback((n: any) => {
     const group = new THREE.Group()
 
-    // tiny sphere
     const r = 0.16
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(r, 16, 16),
@@ -70,23 +78,17 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     )
     group.add(sphere)
 
-    // HTML label
     const el = document.createElement('div')
     el.textContent = String(n.name ?? n.id ?? '')
-    el.className = 'rg-node-label'
-
-    // inline styles so you don’t need a global css file
-    Object.assign(el.style, {
-      fontSize: '12px',
-      lineHeight: '1',
-      padding: '2px 6px',
-      borderRadius: '6px',
-      background: 'rgba(0,0,0,0.55)',
-      color: '#ffeaa7',
-      whiteSpace: 'nowrap',
-      userSelect: 'none',
-      pointerEvents: 'none' // let clicks go to the sphere
-    } as CSSStyleDeclaration)
+    el.style.fontSize = '12px'
+    el.style.lineHeight = '1'
+    el.style.padding = '2px 6px'
+    el.style.borderRadius = '6px'
+    el.style.background = 'rgba(0,0,0,0.55)'
+    el.style.color = '#ffeaa7'
+    el.style.whiteSpace = 'nowrap'
+    el.style.userSelect = 'none'
+    el.style.pointerEvents = 'none'
 
     const label = new CSS2DObject(el)
     label.position.set(0, r * 3.2, 0) // above sphere
@@ -95,6 +97,7 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return group
   }, [getNodeColor])
 
+  // normalize data
   const cleanData = useMemo(() => {
     const nodes = (data?.nodes ?? []).map((n: any, i: number) => ({
       ...n,
@@ -113,11 +116,11 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
     return { nodes, links }
   }, [data])
 
+  // ensure our accessor is applied + force rebuild
   useEffect(() => {
     const g = graphRef.current
     if (!g || !cleanData.nodes.length) return
     if (typeof g.nodeThreeObject === 'function') g.nodeThreeObject(nodeThreeObject)
-    // IMPORTANT: allow our custom object to extend the default node object
     if (typeof g.nodeThreeObjectExtend === 'function') g.nodeThreeObjectExtend(true)
     if (typeof g.refresh === 'function') g.refresh()
   }, [graphRef, nodeThreeObject, cleanData])
@@ -143,8 +146,8 @@ const Graph3D = forwardRef<any, Graph3DProps>(function Graph3D(
         graphData={cleanData}
         backgroundColor="#000011"
         showNavInfo={false}
-        // the magic line: adds the HTML overlay renderer so labels are always visible
-        extraRenderers={[new CSS2DRenderer()]}
+        // TS thinks extraRenderers must be THREE.Renderer (canvas). Cast is safe at runtime.
+        extraRenderers={[css2d as unknown as THREE.Renderer]}
         rendererConfig={{ antialias: true, alpha: true, logarithmicDepthBuffer: false }}
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={true}
