@@ -5,7 +5,7 @@ pipeline {
     timestamps()
     ansiColor('xterm')
     buildDiscarder(logRotator(numToKeepStr: '20'))
-    timeout(time: 60, unit: 'MINUTES') // global safety timeout
+    timeout(time: 60, unit: 'MINUTES')
   }
 
   environment {
@@ -13,11 +13,15 @@ pipeline {
     FRONTEND_IMAGE          = 'tanmayranaware/applens-frontend'
     BACKEND_IMAGE           = 'tanmayranaware/applens-backend'
     EC2_HOST                = 'ubuntu@ec2-3-21-127-72.us-east-2.compute.amazonaws.com'
+
     TAG                     = "${env.BRANCH_NAME ?: 'main'}-${env.BUILD_NUMBER}"
+
+    // Buildx / BuildKit
     DOCKER_BUILDKIT         = '1'
     DOCKER_CLI_EXPERIMENTAL = 'enabled'
+    PLATFORMS               = 'linux/amd64,linux/arm64'   // <-- multi-arch manifest
 
-    // Build args consumed by your Dockerfile (see notes below)
+    // Next.js build args (Dockerfile uses them)
     NEXT_IGNORE_LINT        = '1'
     NEXT_IGNORE_TSC         = '1'
     NODE_OPTIONS_BUILD      = '--max-old-space-size=2048'
@@ -35,12 +39,12 @@ pipeline {
           docker version || true
           docker buildx version || true
           docker context ls || true
-          docker info | sed -n '1,60p' || true
+          docker info | sed -n '1,80p' || true
         '''
       }
     }
 
-    stage('Enable Buildx (once per agent)') {
+    stage('Enable Buildx') {
       steps {
         sh '''
           set -euxo pipefail
@@ -51,7 +55,7 @@ pipeline {
       }
     }
 
-    stage('Build & Push Images') {
+    stage('Build & Push Images (multi-arch)') {
       options { timeout(time: 40, unit: 'MINUTES') }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
@@ -60,21 +64,10 @@ pipeline {
           sh '''
             set -euxo pipefail
 
-            # Login (registry optional for docker.io)
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin "$REGISTRY"
 
-            # Ensure buildx builder is ready
             docker buildx create --use || true
             docker buildx inspect --bootstrap
-
-            # Auto-select platform to avoid QEMU when running on Apple Silicon agents
-            # arm64 host -> build linux/arm64; otherwise linux/amd64
-            if uname -m | grep -qi 'arm\\|aarch64'; then
-              export TARGET_PLATFORM=linux/arm64
-            else
-              export TARGET_PLATFORM=linux/amd64
-            fi
-            echo "Using buildx --platform=${TARGET_PLATFORM}"
 
             retry_build_push() {
               local image="$1" tag="$2" dockerfile="$3" context="$4"
@@ -84,7 +77,7 @@ pipeline {
                 echo "Attempt $i/$attempts: building & pushing ${image}:${tag}"
                 set +e
                 docker buildx build \
-                  --platform "${TARGET_PLATFORM}" \
+                  --platform "${PLATFORMS}" \
                   --build-arg NEXT_IGNORE_LINT="${NEXT_IGNORE_LINT}" \
                   --build-arg NEXT_IGNORE_TSC="${NEXT_IGNORE_TSC}" \
                   --build-arg NODE_OPTIONS="${NODE_OPTIONS_BUILD}" \
@@ -106,7 +99,6 @@ pipeline {
                 if [ $i -lt $attempts ]; then
                   echo "⚠️ Push failed (rc=$rc). Retrying in ${delay}s..."
                   sleep "$delay"
-                  # Exponential backoff with cap
                   delay=$(( delay*2 > 60 ? 60 : delay*2 ))
                 fi
               done
@@ -115,10 +107,10 @@ pipeline {
               return 1
             }
 
-            echo "Building and pushing frontend image..."
+            echo "Building and pushing FRONTEND (multi-arch: ${PLATFORMS})..."
             retry_build_push "${FRONTEND_IMAGE}" "${TAG}" "frontend/Dockerfile" "frontend"
 
-            echo "Building and pushing backend image..."
+            echo "Building and pushing BACKEND (multi-arch: ${PLATFORMS})..."
             retry_build_push "${BACKEND_IMAGE}" "${TAG}" "backend/Dockerfile" "backend"
           '''
         }
@@ -137,25 +129,23 @@ pipeline {
               ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
                 set -euxo pipefail
 
-                # Login to Docker Hub on EC2
-                echo '${DOCKERHUB_PASS}' | docker login -u '${DOCKERHUB_USER}' --password-stdin docker.io || true
+                # Login on the host (compose will pull)
+                echo "${DOCKERHUB_PASS}" | docker login -u "${DOCKERHUB_USER}" --password-stdin ${REGISTRY} || true
 
                 cd /srv/app
 
-                # Persist the tag used by docker-compose
+                # Persist the image tag for compose
                 if grep -q "^TAG=" .env.prod; then
                   sed -i "s/^TAG=.*/TAG=${TAG}/" .env.prod
                 else
                   echo "TAG=${TAG}" >> .env.prod
                 fi
 
-                # Pull and restart with the fresh images
+                # Pull + recreate with the new tag
                 docker compose -f docker-compose.prod.yml --env-file .env.prod pull
                 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
-                docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 
-                # Optional cleanup
-                docker image prune -f || true
+                docker compose -f docker-compose.prod.yml --env-file .env.prod ps
               '
             """
           }

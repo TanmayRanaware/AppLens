@@ -2,7 +2,7 @@
   email you@email.com
 }
 
-{$DOMAIN} {
+{$DOMAIN:ec2-3-21-127-72.us-east-2.compute.amazonaws.com} {
   route /api/* {
     uri strip_prefix /api
     reverse_proxy app-backend:8000
