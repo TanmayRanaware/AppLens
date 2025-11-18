@@ -22,11 +22,11 @@ pipeline {
     FRONTEND_PLATFORMS      = 'linux/amd64'             // keep frontend single-arch
     BACKEND_PLATFORMS       = "${PLATFORMS}"
 
-    // Next.js build args (consumed by Dockerfile & next.config.mjs)
+    // Next.js build args (consumed by Dockerfile & next.config.js)
     NEXT_IGNORE_LINT   = '1'
     NEXT_IGNORE_TSC    = '1'
     // give Node more headroom during build
-    NODE_OPTIONS_BUILD = '--max-old-space-size=3072'
+    NODE_OPTIONS_BUILD = '--max-old-space-size=4096'
   }
 
   stages {
