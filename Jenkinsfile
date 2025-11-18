@@ -1,7 +1,6 @@
 pipeline {
   agent any
 
-  // CI/CD pipeline for AppLens
   options {
     timestamps()
     ansiColor('xterm')
@@ -19,19 +18,22 @@ pipeline {
     // Buildx / BuildKit
     DOCKER_BUILDKIT         = '1'
     DOCKER_CLI_EXPERIMENTAL = 'enabled'
-    PLATFORMS               = 'linux/amd64,linux/arm64' // default multi-arch
-    FRONTEND_PLATFORMS      = 'linux/amd64'             // keep frontend single-arch
+    PLATFORMS               = 'linux/amd64,linux/arm64'
+    FRONTEND_PLATFORMS      = 'linux/amd64'
     BACKEND_PLATFORMS       = "${PLATFORMS}"
 
-    // Next.js build args (consumed by Dockerfile & next.config.js)
+    // Next.js build args
     NEXT_IGNORE_LINT   = '1'
     NEXT_IGNORE_TSC    = '1'
     NODE_OPTIONS_BUILD = '--max-old-space-size=2048'
 
-    // Critical caps to prevent OOM during page-data collection
+    // Cap worker threads to reduce RAM spikes
     NEXT_CPU_COUNT     = '1'
     SWC_NODE_THREADS   = '1'
     RAYON_NUM_THREADS  = '1'
+
+    // Push via output=… so we can force gzip reliably on your buildx
+    OUTPUT_OPTS = 'type=image,push=true,compression=gzip,force-compression=true'
   }
 
   stages {
@@ -57,12 +59,12 @@ pipeline {
           set -euxo pipefail
           docker context use default || true
 
-          # Recreate a tuned builder (low concurrency + HTTP/1.1)
+          # Recreate a tuned builder (lowest concurrency + HTTP/1.1)
           docker buildx rm ci-builder || true
           docker buildx create \
             --name ci-builder \
             --driver docker-container \
-            --driver-opt env.BUILDKIT_MAX_PARALLELISM=4 \
+            --driver-opt env.BUILDKIT_MAX_PARALLELISM=1 \
             --driver-opt env.BUILDKIT_LIMITED_SCOPE=1 \
             --driver-opt env.GODEBUG=http2client=0 \
             --use
@@ -86,11 +88,12 @@ pipeline {
             docker buildx use ci-builder
             docker buildx inspect --bootstrap
 
+            # Simple retry wrapper (for single-arch frontend)
             retry_build_push() {
               local image="$1" tag="$2" dockerfile="$3" context="$4" platforms="$5"
-              local attempts=4 delay=15 rc=0
+              local attempts=4 delay=10 rc=0
               for ((i=1; i<=attempts; i++)); do
-                echo "Attempt $i/$attempts: building & pushing ${image}:${tag} (platforms=${platforms})"
+                echo "Attempt $i/$attempts: ${image}:${tag} (platforms=${platforms})"
                 set +e
                 docker buildx build \
                   --platform "${platforms}" \
@@ -103,58 +106,60 @@ pipeline {
                   -t "${image}:${tag}" \
                   -t "${image}:latest" \
                   -f "${dockerfile}" "${context}" \
-                  --push \
+                  --output="${OUTPUT_OPTS}" \
                   --provenance=false \
                   --sbom=false \
                   --progress=plain
                 rc=$?; set -e
                 if [ $rc -eq 0 ]; then
-                  echo "✅ Successfully pushed ${image}:${tag}"
+                  echo "✅ Pushed ${image}:${tag}"
                   return 0
                 fi
                 if [ $i -lt $attempts ]; then
                   echo "⚠️ Push failed (rc=$rc). Retrying in ${delay}s..."
                   sleep "$delay"
-                  delay=$(( delay*2 > 120 ? 120 : delay*2 ))
+                  delay=$(( delay*2 > 60 ? 60 : delay*2 ))
                 fi
               done
               echo "❌ Failed to push ${image}:${tag} after ${attempts} attempts"
               return 1
             }
 
+            # Per-arch serialized push + manifest (ALWAYS for backend)
             per_arch_then_manifest() {
               local image="$1" tag="$2" dockerfile="$3" context="$4"
-              echo "Serializing per-arch pushes for ${image}:${tag} ..."
-              # amd64
+
+              echo "==> ${image}:${tag} (linux/amd64) ..."
               docker buildx build \
                 --platform linux/amd64 \
                 -t "${image}:${tag}-amd64" \
                 -f "${dockerfile}" "${context}" \
-                --push --provenance=false --sbom=false --progress=plain
+                --output="${OUTPUT_OPTS}" \
+                --provenance=false --sbom=false --progress=plain
 
-              # arm64
+              echo "==> ${image}:${tag} (linux/arm64) ..."
               docker buildx build \
                 --platform linux/arm64 \
                 -t "${image}:${tag}-arm64" \
                 -f "${dockerfile}" "${context}" \
-                --push --provenance=false --sbom=false --progress=plain
+                --output="${OUTPUT_OPTS}" \
+                --provenance=false --sbom=false --progress=plain
 
+              echo "==> Creating multi-arch manifest ${image}:${tag} (+latest)"
               docker buildx imagetools create \
                 -t "${image}:${tag}" \
                 -t "${image}:latest" \
                 "${image}:${tag}-amd64" \
                 "${image}:${tag}-arm64"
-              echo "✅ Created multi-arch manifest for ${image}:${tag}"
+
+              echo "✅ Multi-arch manifest created for ${image}:${tag}"
             }
 
-            echo "Building and pushing FRONTEND (platforms: ${FRONTEND_PLATFORMS})..."
+            echo "Building & pushing FRONTEND (platforms: ${FRONTEND_PLATFORMS})..."
             retry_build_push "${FRONTEND_IMAGE}" "${TAG}" "frontend/Dockerfile" "frontend" "${FRONTEND_PLATFORMS}"
 
-            echo "Building and pushing BACKEND (platforms: ${BACKEND_PLATFORMS})..."
-            if ! retry_build_push "${BACKEND_IMAGE}" "${TAG}" "backend/Dockerfile" "backend" "${BACKEND_PLATFORMS}"; then
-              echo "🔁 Falling back to per-arch serialized push + manifest for BACKEND..."
-              per_arch_then_manifest "${BACKEND_IMAGE}" "${TAG}" "backend/Dockerfile" "backend"
-            fi
+            echo "Building & pushing BACKEND (serialized per-arch) ..."
+            per_arch_then_manifest "${BACKEND_IMAGE}" "${TAG}" "backend/Dockerfile" "backend"
           '''
         }
       }
