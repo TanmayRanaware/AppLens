@@ -8,7 +8,7 @@ FROM python:3.12-slim AS builder
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    POETRY_VERSION=1.8.3 \
+    POETRY_VERSION=2.0.1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/root/.local/bin:${PATH}"
 
@@ -19,7 +19,7 @@ RUN rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/loc
  && apt-get install -y --no-install-recommends build-essential curl \
  && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry + export plugin (required for `poetry export` in 1.8.x)
+# Install Poetry (2.0+ has built-in export, but plugin is compatible)
 RUN curl -sSL https://install.python-poetry.org | python3 - \
  && poetry self add poetry-plugin-export \
  && poetry --version
