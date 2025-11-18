@@ -32,8 +32,8 @@ pipeline {
     SWC_NODE_THREADS   = '1'
     RAYON_NUM_THREADS  = '1'
 
-    // Push via output=… so we can force gzip reliably on your buildx
-    OUTPUT_OPTS = 'type=image,push=true,compression=gzip,force-compression=true'
+    // Push via output=… (compression removed as it's not supported in this buildx version)
+    OUTPUT_OPTS = 'type=image,push=true'
   }
 
   stages {
@@ -125,25 +125,46 @@ pipeline {
               return 1
             }
 
+            retry_push_arch() {
+              local image="$1" tag="$2" platform="$3" dockerfile="$4" context="$5"
+              local attempts=4 delay=15 rc=0
+              for ((i=1; i<=attempts; i++)); do
+                echo "Attempt $i/$attempts: pushing ${image}:${tag} (platform=${platform})"
+                set +e
+                docker buildx build \
+                  --platform "${platform}" \
+                  -t "${image}:${tag}" \
+                  -f "${dockerfile}" "${context}" \
+                  --output="${OUTPUT_OPTS}" \
+                  --provenance=false --sbom=false --progress=plain
+                rc=$?; set -e
+                if [ $rc -eq 0 ]; then
+                  echo "✅ Successfully pushed ${image}:${tag}"
+                  return 0
+                fi
+                if [ $i -lt $attempts ]; then
+                  echo "⚠️ Push failed (rc=$rc). Retrying in ${delay}s..."
+                  sleep "$delay"
+                  delay=$(( delay*2 > 120 ? 120 : delay*2 ))
+                fi
+              done
+              echo "❌ Failed to push ${image}:${tag} after ${attempts} attempts"
+              return 1
+            }
+
             # Per-arch serialized push + manifest (ALWAYS for backend)
             per_arch_then_manifest() {
               local image="$1" tag="$2" dockerfile="$3" context="$4"
+              echo "Serializing per-arch pushes for ${image}:${tag} ..."
+              # amd64
+              if ! retry_push_arch "${image}" "${tag}-amd64" "linux/amd64" "${dockerfile}" "${context}"; then
+                return 1
+              fi
 
-              echo "==> ${image}:${tag} (linux/amd64) ..."
-              docker buildx build \
-                --platform linux/amd64 \
-                -t "${image}:${tag}-amd64" \
-                -f "${dockerfile}" "${context}" \
-                --output="${OUTPUT_OPTS}" \
-                --provenance=false --sbom=false --progress=plain
-
-              echo "==> ${image}:${tag} (linux/arm64) ..."
-              docker buildx build \
-                --platform linux/arm64 \
-                -t "${image}:${tag}-arm64" \
-                -f "${dockerfile}" "${context}" \
-                --output="${OUTPUT_OPTS}" \
-                --provenance=false --sbom=false --progress=plain
+              # arm64
+              if ! retry_push_arch "${image}" "${tag}-arm64" "linux/arm64" "${dockerfile}" "${context}"; then
+                return 1
+              fi
 
               echo "==> Creating multi-arch manifest ${image}:${tag} (+latest)"
               docker buildx imagetools create \
