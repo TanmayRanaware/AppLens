@@ -31,9 +31,6 @@ pipeline {
     NEXT_CPU_COUNT     = '1'
     SWC_NODE_THREADS   = '1'
     RAYON_NUM_THREADS  = '1'
-
-    // NEW: prefer gzip (zstd can trip middleboxes)
-    COMPRESSION        = 'gzip'
   }
 
   stages {
@@ -95,7 +92,6 @@ pipeline {
                 echo "Attempt $i/$attempts: building & pushing ${image}:${tag} (platforms=${platforms})"
                 set +e
                 docker buildx build \
-                  --compression="${COMPRESSION}" \
                   --platform "${platforms}" \
                   --build-arg NEXT_IGNORE_LINT="${NEXT_IGNORE_LINT}" \
                   --build-arg NEXT_IGNORE_TSC="${NEXT_IGNORE_TSC}" \
@@ -130,7 +126,6 @@ pipeline {
               echo "Serializing per-arch pushes for ${image}:${tag} ..."
               # amd64
               docker buildx build \
-                --compression="${COMPRESSION}" \
                 --platform linux/amd64 \
                 -t "${image}:${tag}-amd64" \
                 -f "${dockerfile}" "${context}" \
@@ -138,7 +133,6 @@ pipeline {
 
               # arm64
               docker buildx build \
-                --compression="${COMPRESSION}" \
                 --platform linux/arm64 \
                 -t "${image}:${tag}-arm64" \
                 -f "${dockerfile}" "${context}" \
