@@ -10,9 +10,8 @@
       PATH="/root/.local/bin:${PATH}"
   
   # Faster apt + clean
-  # Note: Only cache /var/cache/apt, not /var/lib/apt to avoid lock conflicts in multi-platform builds
-  RUN --mount=type=cache,target=/var/cache/apt \
-      apt-get update -y \
+  # Note: Removed cache mounts to avoid lock conflicts when building for multiple platforms in parallel
+  RUN apt-get update -y \
    && apt-get install -y --no-install-recommends build-essential curl \
    && rm -rf /var/lib/apt/lists/*
   
