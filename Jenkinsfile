@@ -25,8 +25,12 @@ pipeline {
     // Next.js build args (consumed by Dockerfile & next.config.js)
     NEXT_IGNORE_LINT   = '1'
     NEXT_IGNORE_TSC    = '1'
-    // give Node more headroom during build
     NODE_OPTIONS_BUILD = '--max-old-space-size=4096'
+
+    // *** Critical caps to prevent OOM during page-data collection ***
+    NEXT_CPU_COUNT     = '1'
+    SWC_NODE_THREADS   = '1'
+    RAYON_NUM_THREADS  = '1'
   }
 
   stages {
@@ -52,12 +56,12 @@ pipeline {
           set -euxo pipefail
           docker context use default || true
 
-          # Recreate a tuned builder (lower parallelism -> lower RAM)
+          # Recreate a tuned builder (lowest parallelism -> lowest RAM)
           docker buildx rm ci-builder || true
           docker buildx create \
             --name ci-builder \
             --driver docker-container \
-            --driver-opt env.BUILDKIT_MAX_PARALLELISM=2 \
+            --driver-opt env.BUILDKIT_MAX_PARALLELISM=1 \
             --use
 
           docker buildx inspect --bootstrap
@@ -90,6 +94,9 @@ pipeline {
                   --build-arg NEXT_IGNORE_LINT="${NEXT_IGNORE_LINT}" \
                   --build-arg NEXT_IGNORE_TSC="${NEXT_IGNORE_TSC}" \
                   --build-arg NODE_OPTIONS="${NODE_OPTIONS_BUILD}" \
+                  --build-arg NEXT_CPU_COUNT="${NEXT_CPU_COUNT}" \
+                  --build-arg SWC_NODE_THREADS="${SWC_NODE_THREADS}" \
+                  --build-arg RAYON_NUM_THREADS="${RAYON_NUM_THREADS}" \
                   -t "${image}:${tag}" \
                   -t "${image}:latest" \
                   -f "${dockerfile}" "${context}" \

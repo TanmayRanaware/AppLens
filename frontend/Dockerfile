@@ -15,35 +15,37 @@
     RUN apk add --no-cache libc6-compat
     WORKDIR /app
     
-    # Accept CI knobs from build args (set in Jenkins)
+    # Build-time knobs from CI
     ARG NEXT_IGNORE_LINT=1
     ARG NEXT_IGNORE_TSC=1
     ARG NODE_OPTIONS="--max-old-space-size=4096"
     
+    # Apply envs
     ENV NEXT_IGNORE_LINT=$NEXT_IGNORE_LINT
     ENV NEXT_IGNORE_TSC=$NEXT_IGNORE_TSC
     ENV NODE_OPTIONS=$NODE_OPTIONS
     ENV NEXT_TELEMETRY_DISABLED=1
     
-    # Reduce SWC parallelism to tame RAM spikes (slower, safer)
-    ENV SWC_NODE_THREADS=1
-    # (Alternative if you ever hit spikes again)
-    # ENV RAYON_NUM_THREADS=1
+    # Strictly cap all thread pools to avoid OOM during "Collecting page data"
+    ENV NEXT_CPU_COUNT=1 \
+        SWC_NODE_THREADS=1 \
+        RAYON_NUM_THREADS=1
     
     COPY --from=deps /app/node_modules ./node_modules
     COPY . .
     
-    # Log effective env so it shows up in Jenkins
-    RUN node -e "console.log('BUILD_ENV', {NEXT_IGNORE_LINT:process.env.NEXT_IGNORE_LINT,NEXT_IGNORE_TSC:process.env.NEXT_IGNORE_TSC,NODE_OPTIONS:process.env.NODE_OPTIONS})"
+    # Log effective build env
+    RUN node -e "console.log('BUILD_ENV', {NEXT_IGNORE_LINT:process.env.NEXT_IGNORE_LINT,NEXT_IGNORE_TSC:process.env.NEXT_IGNORE_TSC,NODE_OPTIONS:process.env.NODE_OPTIONS,NEXT_CPU_COUNT:process.env.NEXT_CPU_COUNT,SWC_NODE_THREADS:process.env.SWC_NODE_THREADS,RAYON_NUM_THREADS:process.env.RAYON_NUM_THREADS})"
     
-    RUN npm run build
+    # IMPORTANT: invoke next via node to ensure heap flag sticks
+    RUN node --max-old-space-size=4096 node_modules/next/dist/bin/next build
     
     # ---------- Runner ----------
     FROM base AS runner
     RUN apk add --no-cache libc6-compat
     WORKDIR /app
     
-    # Create non-root user
+    # Non-root runtime
     RUN addgroup --system --gid 1001 nodejs \
      && adduser  --system --uid 1001 nextjs
     USER nextjs
@@ -61,10 +63,8 @@
     
     EXPOSE 3000
     
-    # Health check hits a cheap page; change to /health if you add one
     HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
       CMD node -e "require('http').get('http://localhost:3000', r => process.exit(r.statusCode===200?0:1)).on('error', ()=>process.exit(1))" || exit 1
     
-    # Next standalone provides server.js in root
     CMD ["node", "server.js"]
     
