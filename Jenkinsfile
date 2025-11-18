@@ -86,7 +86,7 @@ pipeline {
 
             retry_build_push() {
               local image="$1" tag="$2" dockerfile="$3" context="$4" platforms="$5"
-              local attempts=5 delay=8 rc=0
+              local attempts=8 delay=15 rc=0
               for ((i=1; i<=attempts; i++)); do
                 echo "Attempt $i/$attempts: building & pushing ${image}:${tag} (platforms=${platforms})"
                 set +e
@@ -113,7 +113,7 @@ pipeline {
                 if [ $i -lt $attempts ]; then
                   echo "⚠️ Push failed (rc=$rc). Retrying in ${delay}s..."
                   sleep "$delay"
-                  delay=$(( delay*2 > 60 ? 60 : delay*2 ))
+                  delay=$(( delay*2 > 120 ? 120 : delay*2 ))
                 fi
               done
               echo "❌ Failed to push ${image}:${tag} after ${attempts} attempts"
