@@ -1,7 +1,7 @@
 """Chat routes for AI agents"""
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 from app.routes.auth import get_current_user
 from app.agents.error_agent import ErrorAgent
@@ -32,6 +32,8 @@ class WhatIfRequest(BaseModel):
 class NLQRequest(BaseModel):
     """Request for NLQ (Ask Me)"""
     question: str
+    error_analysis_context: Optional[Dict[str, Any]] = None  # Context from previous error analysis
+    what_if_context: Optional[Dict[str, Any]] = None  # Context from previous what-if analysis
 
 
 @router.post("/error-analyzer")
@@ -112,7 +114,11 @@ async def nlq(
                     logger.warning(f"Could not create MCP client: {e}")
             
             agent = NLQAgent(session, mcp_client=mcp_client)
-            result = await agent.query(request_body.question)
+            result = await agent.query(
+                request_body.question,
+                error_analysis_context=request_body.error_analysis_context,
+                what_if_context=request_body.what_if_context
+            )
             return result
     except Exception as e:
         logger.error(f"Error in nlq endpoint: {e}", exc_info=True)

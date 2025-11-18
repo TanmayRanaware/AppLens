@@ -29,6 +29,8 @@ export default function ChatDock({
   const [loading, setLoading] = useState(false)
   const [toolMode, setToolMode] = useState<ToolMode>('chat')
   const [expandedMessages, setExpandedMessages] = useState<Set<number>>(new Set())
+  const [lastErrorAnalysisContext, setLastErrorAnalysisContext] = useState<any>(null) // Store last error analysis context
+  const [lastWhatIfContext, setLastWhatIfContext] = useState<any>(null) // Store last what-if context
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   
@@ -83,7 +85,15 @@ export default function ChatDock({
       let response: any
       
       // Use explicit tool mode or auto-detect
-      if (toolMode === 'error-analyzer' || (toolMode === 'chat' && (userMessage.toLowerCase().includes('error') || userMessage.toLowerCase().includes('log')))) {
+      // Only run error analyzer if explicitly in error-analyzer mode OR if it looks like an error log
+      // Don't auto-detect error logs if we have error analysis context (likely a follow-up question)
+      const looksLikeErrorLog = toolMode === 'chat' && (
+        (userMessage.toLowerCase().includes('error') && userMessage.length > 200) ||  // Long error log
+        (userMessage.toLowerCase().includes('traceback') || userMessage.toLowerCase().includes('exception')) ||
+        (userMessage.match(/\d{4}-\d{2}-\d{2}.*ERROR/) || userMessage.match(/\d{2}:\d{2}:\d{2}.*ERROR/))  // Log format with timestamp
+      )
+      
+      if (toolMode === 'error-analyzer' || (looksLikeErrorLog && !lastErrorAnalysisContext)) {
         // Error Analyzer: user pastes a log → agent detects implicated services/edges
         response = await api.post('/chat/error-analyzer', { log_text: userMessage })
         
@@ -100,6 +110,20 @@ export default function ChatDock({
           }
           if (primaryNode && onSourceNode) {
             onSourceNode(String(primaryNode))
+          }
+          
+          // Store error analysis context even when there's an error (so user can ask about it)
+          if (response.data.reasoning || response.data.analysis) {
+            setLastErrorAnalysisContext({
+              primary_node: response.data.primary_node || response.data.source_node,
+              primary_service_name: response.data.primary_service_name || response.data.source_service_name,
+              dependent_nodes: response.data.dependent_nodes || response.data.affected_nodes || [],
+              dependent_service_names: response.data.dependent_service_names || response.data.affected_service_names || [],
+              affected_edges: response.data.affected_edges || [],
+              reasoning: response.data.reasoning,
+              analysis: response.data.analysis,
+              error: response.data.error
+            })
           }
         } else {
           // Set primary service (where error occurred) - BLUE
@@ -154,45 +178,159 @@ export default function ChatDock({
             console.log('⚠️ No affected edges found, clearing link highlights')
             onHighlightLinks([])
           }
+          
+          // Store error analysis context for follow-up questions
+          setLastErrorAnalysisContext({
+            primary_node: response.data.primary_node || response.data.source_node,
+            primary_service_name: response.data.primary_service_name || response.data.source_service_name,
+            dependent_nodes: response.data.dependent_nodes || response.data.affected_nodes || [],
+            dependent_service_names: response.data.dependent_service_names || response.data.affected_service_names || [],
+            affected_edges: response.data.affected_edges || [],
+            reasoning: response.data.reasoning,
+            analysis: response.data.analysis
+          })
         }
-      } else if (toolMode === 'what-if' || (toolMode === 'chat' && (userMessage.toLowerCase().includes('what if') || userMessage.toLowerCase().includes('impact') || userMessage.toLowerCase().includes('change')))) {
+      } else if (toolMode === 'what-if' || (toolMode === 'chat' && !lastWhatIfContext && (userMessage.toLowerCase().includes('what if') || userMessage.toLowerCase().includes('impact') || userMessage.toLowerCase().includes('change')))) {
         // What-If Simulator: user describes a pre-deployment change → agent predicts blast radius
+        // EXACTLY same structure as error analyzer
         response = await api.post('/chat/what-if', { 
           change_description: userMessage,
           repo: selectedNode?.repo || '',
           diff: userMessage,
         })
         
-        // Set changed services (RED) - all changed services
-        if (response.data.changed_service_ids && response.data.changed_service_ids.length > 0) {
-          if (onChangedNodes) {
-            onChangedNodes(response.data.changed_service_ids.map((id: any) => String(id)))
-          }
-          // Also set first one as source node for compatibility
-          if (onSourceNode) {
-            onSourceNode(String(response.data.changed_service_ids[0]))
-          }
-        }
+        console.log('What-if response:', response.data)
         
-        // Combine blast radius and risk hotspots as highlighted nodes (GOLDEN)
-        const allAffectedNodes = [
-          ...(response.data.blast_radius_nodes || []),
-          ...(response.data.risk_hotspot_nodes || [])
-        ]
-        if (allAffectedNodes.length > 0) {
-          onHighlightNodes(allAffectedNodes)
-        }
-        
-        // Highlight affected edges (RED) - only edges connecting changed services to blast radius
-        if (response.data.blast_radius_edges && response.data.blast_radius_edges.length > 0) {
-          const linkKeys = response.data.blast_radius_edges.map((edge: any) => 
-            `${edge.source}-${edge.target}`
-          )
-          onHighlightLinks(linkKeys)
+        // Check if there's an error (EXACTLY same as error analyzer)
+        if (response.data.error) {
+          console.warn('What-if returned error:', response.data.error)
+          // Still try to set primary node if available
+          const primaryNode = response.data.primary_node || response.data.source_node
+          if (primaryNode && onChangedNodes) {
+            console.log('Setting primary node (error case):', primaryNode)
+            onChangedNodes([String(primaryNode)])
+          }
+          if (primaryNode && onSourceNode) {
+            onSourceNode(String(primaryNode))
+          }
+          
+          // Store what-if context even when there's an error (so user can ask about it)
+          if (response.data.reasoning || response.data.analysis) {
+            setLastWhatIfContext({
+              primary_node: response.data.primary_node || response.data.source_node,
+              primary_service_name: response.data.primary_service_name || response.data.source_service_name,
+              dependent_nodes: response.data.dependent_nodes || response.data.affected_nodes || [],
+              dependent_service_names: response.data.dependent_service_names || response.data.affected_service_names || [],
+              affected_edges: response.data.affected_edges || [],
+              reasoning: response.data.reasoning,
+              analysis: response.data.analysis,
+              error: response.data.error
+            })
+          }
+        } else {
+          // Set primary service (where change occurred) - BLUE (EXACTLY same as error analyzer)
+          const primaryNode = response.data.primary_node || response.data.source_node
+          const primaryNodeStr = primaryNode ? String(primaryNode) : null
+          console.log('🔵 What-If Response:', {
+            primaryNode,
+            primaryNodeStr,
+            primaryServiceName: response.data.primary_service_name || response.data.source_service_name,
+            dependentNodes: response.data.dependent_nodes || response.data.affected_nodes,
+            dependentNames: response.data.dependent_service_names || response.data.affected_service_names
+          })
+          
+          if (primaryNodeStr && onChangedNodes) {
+            console.log('🔵 Setting primary node (BLUE):', primaryNodeStr)
+            onChangedNodes([primaryNodeStr])
+          }
+          
+          // Also set as source node for backward compatibility
+          if (primaryNodeStr && onSourceNode) {
+            console.log('🔵 Setting source node:', primaryNodeStr)
+            onSourceNode(primaryNodeStr)
+          }
+          
+          // Highlight dependent nodes (services impacted by change) - RED (EXACTLY same as error analyzer)
+          const dependentNodes = response.data.dependent_nodes || response.data.affected_nodes || []
+          console.log('🔴 Raw dependent nodes:', dependentNodes)
+          if (dependentNodes && Array.isArray(dependentNodes) && dependentNodes.length > 0) {
+            const dependentNodeIds = dependentNodes.map((id: any) => String(id))
+            console.log('🔴 Highlighting dependent nodes (RED):', dependentNodeIds)
+            onHighlightNodes(dependentNodeIds)
+          } else {
+            console.log('⚠️ No dependent nodes found, clearing highlights')
+            onHighlightNodes([])
+          }
+          
+          // Highlight affected links/edges (between primary and dependent services) - RED
+          const affectedEdges = response.data.affected_edges || []
+          console.log('🔗 Raw affected edges from backend:', affectedEdges)
+          if (affectedEdges && Array.isArray(affectedEdges) && affectedEdges.length > 0) {
+            // Convert edges to link keys for highlighting
+            // Format: "source_service_id-target_service_id"
+            const linkKeys = affectedEdges.map((edge: any) => {
+              const sourceId = String(edge.source || '')
+              const targetId = String(edge.target || '')
+              return `${sourceId}-${targetId}`
+            })
+            console.log('🔗 Highlighting links (keys):', linkKeys)
+            console.log('🔗 Sample edge:', affectedEdges[0], '→ Key:', linkKeys[0])
+            onHighlightLinks(linkKeys)
+          } else {
+            console.log('⚠️ No affected edges found, clearing link highlights')
+            onHighlightLinks([])
+          }
+          
+          // Store what-if context for follow-up questions (same as error analyzer)
+          setLastWhatIfContext({
+            primary_node: response.data.primary_node || response.data.source_node,
+            primary_service_name: response.data.primary_service_name || response.data.source_service_name,
+            dependent_nodes: response.data.dependent_nodes || response.data.affected_nodes || [],
+            dependent_service_names: response.data.dependent_service_names || response.data.affected_service_names || [],
+            affected_edges: response.data.affected_edges || [],
+            reasoning: response.data.reasoning,
+            analysis: response.data.analysis
+          })
         }
       } else if (toolMode === 'nlq' || toolMode === 'chat') {
         // NLQ: Ask Me - CrewAI agent with database and GitHub access
-        response = await api.post('/chat/nlq', { question: userMessage })
+        // Always include error analysis context if it exists - the NLQ agent will determine if it's relevant
+        // This allows the agent to answer follow-up questions about the error analysis output
+        const lowerMessage = userMessage.toLowerCase()
+        
+        // Check if question is clearly about something unrelated (dashboards, new scans, etc.)
+        const isUnrelatedQuestion = lowerMessage.includes('dashboard') && 
+                                    (lowerMessage.includes('go to') || lowerMessage.includes('open') || lowerMessage.includes('show'))
+        
+        const requestBody: any = { question: userMessage }
+        
+        // Include error analysis context if available and question isn't clearly unrelated
+        if (lastErrorAnalysisContext && !isUnrelatedQuestion) {
+          console.log('🔍 Including error analysis context for question', {
+            question: userMessage,
+            hasContext: !!lastErrorAnalysisContext,
+            primaryService: lastErrorAnalysisContext.primary_service_name,
+            reasoning: lastErrorAnalysisContext.reasoning ? 'present' : 'missing'
+          })
+          requestBody.error_analysis_context = lastErrorAnalysisContext
+        } else if (lastErrorAnalysisContext && isUnrelatedQuestion) {
+          console.log('⚠️ Question appears unrelated to error analysis, not including context')
+        }
+        
+        // Include what-if context if available and question isn't clearly unrelated
+        if (lastWhatIfContext && !isUnrelatedQuestion) {
+          console.log('🔍 Including what-if context for question', {
+            question: userMessage,
+            hasContext: !!lastWhatIfContext,
+            primaryService: lastWhatIfContext.primary_service_name,
+            reasoning: lastWhatIfContext.reasoning ? 'present' : 'missing'
+          })
+          requestBody.what_if_context = lastWhatIfContext
+        } else if (lastWhatIfContext && isUnrelatedQuestion) {
+          console.log('⚠️ Question appears unrelated to what-if analysis, not including context')
+        }
+        
+        response = await api.post('/chat/nlq', requestBody)
         if (response.data.graph_hints?.highlight_services) {
           onHighlightNodes(response.data.graph_hints.highlight_services)
         }

@@ -127,11 +127,28 @@ class WhatIfAgent:
             # Step 1: CrewAI analyzes the change description to identify primarily affected services
             analysis_result = await self._analyze_change_with_crewai(change_description, diff, file_path, pr_url)
             
-            # Step 2: Extract changed service names from analysis
-            changed_service_names = analysis_result.get("changed_services", [])
+            # Step 2: Extract changed service names - prioritize direct extraction from change description
+            # First try to extract directly from change description (most reliable)
+            changed_service_names = self._extract_service_names(change_description)
+            logger.info(f"Extracted services directly from change description: {changed_service_names}")
+            
+            # Then check CrewAI analysis result
+            analysis_changed_services = analysis_result.get("changed_services", [])
+            if analysis_changed_services:
+                logger.info(f"Extracted services from CrewAI analysis: {analysis_changed_services}")
+                # If CrewAI found services and they match what we found in description, use them
+                # Otherwise, prioritize description extraction as it's more explicit
+                if not changed_service_names or any(s in analysis_changed_services for s in changed_service_names):
+                    # Merge but prioritize description matches
+                    for service in analysis_changed_services:
+                        if service not in changed_service_names:
+                            # Only add if it's explicitly mentioned as being changed
+                            if any(keyword in change_description.lower() for keyword in [service.lower(), f"update {service.lower()}", f"change {service.lower()}", f"modify {service.lower()}"]):
+                                changed_service_names.append(service)
+            
             if not changed_service_names:
-                # Fallback: try to extract from change description
-                changed_service_names = self._extract_service_names(change_description)
+                logger.warning("No services extracted from description or analysis, using analysis result as fallback")
+                changed_service_names = analysis_changed_services if analysis_changed_services else []
             
             if not changed_service_names:
                 raw_reasoning = analysis_result.get("analysis", "Analysis completed but no services identified")
@@ -146,21 +163,49 @@ class WhatIfAgent:
             # Step 3: Find changed services in database
             changed_services = []
             for service_name in changed_service_names:
+                logger.info(f"Attempting to find service in database: '{service_name}'")
                 service = await self._find_service_by_name(service_name)
                 if service:
+                    logger.info(f"✅ Found service: '{service.name}' (ID: {service.id})")
                     changed_services.append(service)
+                else:
+                    logger.warning(f"❌ Service '{service_name}' not found in database. Trying variations...")
+                    # Try with applens- prefix if not already present
+                    if not service_name.startswith('applens-'):
+                        applens_name = f'applens-{service_name}'
+                        logger.info(f"Trying with 'applens-' prefix: '{applens_name}'")
+                        service = await self._find_service_by_name(applens_name)
+                        if service:
+                            logger.info(f"✅ Found service with prefix: '{service.name}' (ID: {service.id})")
+                            changed_services.append(service)
             
             if not changed_services:
+                logger.error(f"❌ None of the changed services {changed_service_names} were found in database")
                 raw_reasoning = analysis_result.get("analysis", "")
                 clean_reasoning = clean_text_for_chat(raw_reasoning)
                 return {
-                    "error": f"Changed services {changed_service_names} not found in database",
+                    "error": f"Changed services {changed_service_names} not found in database. Available services may use different naming conventions (e.g., 'applens-payment-service' instead of 'payment-service')",
                     "reasoning": clean_reasoning,
+                    "changed_services": changed_service_names,
                 }
             
-            # Step 4: Find blast radius
-            # For incoming connections (services that call the changed service): Use database
-            # For outgoing connections (services that the changed service calls): Scan GitHub repo
+            # Step 4: Use CrewAI to analyze the change impact on dependent services
+            # First, get all connected services from interactions table
+            logger.info(f"Step 4: Analyzing impact on dependent services for: {[s.name for s in changed_services]}")
+            
+            # Get all interactions involving the changed service
+            all_connected_services = await self._get_all_connected_services(changed_services)
+            logger.info(f"Found {len(all_connected_services)} connected services from interactions table")
+            
+            # Use CrewAI to determine which connected services will be harmed by this change
+            impact_analysis = await self._analyze_impact_on_dependent_services(
+                change_description,
+                changed_service_names,
+                all_connected_services,
+                analysis_result.get("analysis", "")
+            )
+            
+            # Step 5: Filter blast radius to only include services that will be harmed
             blast_radius_nodes = set()
             blast_radius_edges = []
             blast_radius_details = {}  # {service_id: {type, url, topic, reason, file_path, line}}
@@ -168,16 +213,16 @@ class WhatIfAgent:
             for changed_service in changed_services:
                 logger.info(f"Analyzing service: {changed_service.name}")
                 
-                # First, find services that call the changed service (incoming connections) from database
-                # This is more efficient than scanning all repos
-                await self._find_incoming_connections_from_db(
+                # Get all interactions for this changed service
+                await self._find_impacted_connections_from_db(
                     changed_service,
+                    impact_analysis,
                     blast_radius_nodes,
                     blast_radius_edges,
                     blast_radius_details,
                 )
                 
-                # Then, scan the changed service's repo to find what it calls (outgoing connections)
+                # Also check outgoing connections (what this service calls)
                 repo_result = await self.db_session.execute(
                     select(Repository).where(Repository.id == changed_service.repo_id)
                 )
@@ -202,7 +247,7 @@ class WhatIfAgent:
                         blast_radius_details,
                     )
             
-            # Step 5: Deduplicate and filter blast radius edges
+            # Step 6: Deduplicate and filter blast radius edges
             # Only keep edges that directly connect changed services to blast radius services
             # An edge should have: one end = changed service, other end = blast radius service
             changed_service_ids_set = {str(s.id) for s in changed_services}
@@ -239,7 +284,7 @@ class WhatIfAgent:
             blast_radius_edges = deduplicated_blast_radius_edges
             logger.info(f"After deduplication: {len(blast_radius_edges)} edges connecting changed services to blast radius")
             
-            # Step 6: Find risk hotspots (services with high impact potential)
+            # Step 7: Find risk hotspots (services with high impact potential)
             risk_hotspot_nodes = set()
             risk_hotspot_details = {}
             
@@ -278,11 +323,15 @@ class WhatIfAgent:
                             "reason": f"High risk hotspot: {incoming_count} services depend on {service_name}, {outgoing_count} dependencies",
                         }
             
-            # Step 7: Get service names
+            # Step 8: Get service names
             service_id_to_name = {}
+            # Use actual database service names (not extracted names) for consistency with graph
             changed_service_names_list = [s.name for s in changed_services]
             for service in changed_services:
                 service_id_to_name[str(service.id)] = service.name
+            
+            logger.info(f"Changed service names (from database): {changed_service_names_list}")
+            logger.info(f"Changed service IDs: {[str(s.id) for s in changed_services]}")
             
             blast_radius_service_names = []
             if blast_radius_nodes:
@@ -310,7 +359,7 @@ class WhatIfAgent:
                 except Exception as e:
                     logger.error(f"Error converting service IDs to UUIDs: {e}")
             
-            # Step 7: Build reasoning with detailed proof
+            # Step 9: Build reasoning with detailed proof
             reasoning = self._build_reasoning(
                 analysis_result,
                 changed_service_names_list,
@@ -327,12 +376,40 @@ class WhatIfAgent:
             raw_analysis = analysis_result.get("analysis", "")
             clean_analysis = clean_text_for_chat(raw_analysis)
             
+            # Return structure matching error analyzer for consistency
+            # Primary node = first changed service (BLUE)
+            # Use actual database service name (not extracted name) to ensure it matches graph nodes
+            primary_service_id = str(changed_services[0].id) if changed_services else None
+            primary_service_name = changed_services[0].name if changed_services else None
+            
+            logger.info(f"Primary service ID: {primary_service_id}, Name: {primary_service_name}")
+            logger.info(f"Dependent nodes count: {len(blast_radius_nodes)}")
+            logger.info(f"Affected edges count: {len(blast_radius_edges)}")
+            
+            # Dependent nodes = blast radius services (RED)
+            dependent_nodes = list(blast_radius_nodes)
+            dependent_service_names = blast_radius_service_names
+            
+            # Affected edges = blast radius edges
+            affected_edges = blast_radius_edges
+            
             return {
+                # New structure matching error analyzer
+                "primary_node": primary_service_id,
+                "primary_service_name": primary_service_name,
+                "source_node": primary_service_id,  # Keep for backward compatibility
+                "source_service_name": primary_service_name,  # Keep for backward compatibility
+                "dependent_nodes": dependent_nodes,
+                "dependent_service_names": dependent_service_names,
+                "affected_nodes": dependent_nodes,  # Keep for backward compatibility
+                "affected_service_names": dependent_service_names,  # Keep for backward compatibility
+                "affected_edges": affected_edges,
+                # Original what-if structure (keep for backward compatibility)
                 "changed_services": changed_service_names_list,
                 "changed_service_ids": [str(s.id) for s in changed_services],
-                "blast_radius_nodes": list(blast_radius_nodes),
-                "blast_radius_service_names": blast_radius_service_names,
-                "blast_radius_edges": blast_radius_edges,
+                "blast_radius_nodes": dependent_nodes,
+                "blast_radius_service_names": dependent_service_names,
+                "blast_radius_edges": affected_edges,
                 "risk_hotspot_nodes": list(risk_hotspot_nodes),
                 "risk_hotspot_service_names": risk_hotspot_service_names,
                 "reasoning": reasoning,  # Already cleaned in _build_reasoning
@@ -482,6 +559,299 @@ class WhatIfAgent:
             logger.error(f"Error scanning repository {repository.full_name}: {e}", exc_info=True)
             # Fallback to database for outgoing connections
             await self._find_outgoing_connections_from_db(changed_service, blast_radius_nodes, blast_radius_edges, blast_radius_details)
+    
+    async def _get_all_connected_services(self, changed_services: List[Service]) -> Dict[str, List[Dict]]:
+        """Get all services connected to the changed service(s) from interactions table
+        
+        Returns:
+            Dict mapping service_id -> [list of interactions with details]
+        """
+        connected_services = {}  # {service_id: [interaction_details]}
+        changed_service_ids = {str(s.id) for s in changed_services}
+        
+        for changed_service in changed_services:
+            changed_service_id = str(changed_service.id)
+            
+            # Find incoming connections (services that call the changed service)
+            result = await self.db_session.execute(
+                select(Interaction).where(Interaction.target_service_id == uuid.UUID(changed_service_id))
+            )
+            incoming_interactions = result.scalars().all()
+            
+            # Find outgoing connections (services that the changed service calls)
+            result = await self.db_session.execute(
+                select(Interaction).where(Interaction.source_service_id == uuid.UUID(changed_service_id))
+            )
+            outgoing_interactions = result.scalars().all()
+            
+            # Process incoming connections
+            for interaction in incoming_interactions:
+                caller_id = str(interaction.source_service_id)
+                if caller_id not in connected_services:
+                    connected_services[caller_id] = []
+                connected_services[caller_id].append({
+                    "type": "incoming",
+                    "connection_type": interaction.edge_type.value,
+                    "http_method": interaction.http_method,
+                    "http_url": interaction.http_url,
+                    "kafka_topic": interaction.kafka_topic,
+                    "target_service_id": changed_service_id,
+                    "target_service_name": changed_service.name,
+                })
+            
+            # Process outgoing connections
+            for interaction in outgoing_interactions:
+                target_id = str(interaction.target_service_id)
+                if target_id not in connected_services:
+                    connected_services[target_id] = []
+                connected_services[target_id].append({
+                    "type": "outgoing",
+                    "connection_type": interaction.edge_type.value,
+                    "http_method": interaction.http_method,
+                    "http_url": interaction.http_url,
+                    "kafka_topic": interaction.kafka_topic,
+                    "source_service_id": changed_service_id,
+                    "source_service_name": changed_service.name,
+                })
+        
+        # Get service names for each connected service
+        for service_id in connected_services.keys():
+            result = await self.db_session.execute(
+                select(Service).where(Service.id == uuid.UUID(service_id))
+            )
+            service = result.scalar_one_or_none()
+            if service:
+                for conn in connected_services[service_id]:
+                    conn["service_name"] = service.name
+        
+        return connected_services
+    
+    async def _analyze_impact_on_dependent_services(
+        self,
+        change_description: str,
+        changed_service_names: List[str],
+        connected_services: Dict[str, List[Dict]],
+        analysis_context: str = ""
+    ) -> Dict[str, bool]:
+        """Use CrewAI to determine which dependent services will be harmed by the change
+        
+        Returns:
+            Dict mapping service_id -> bool (True if will be harmed, False otherwise)
+        """
+        if not connected_services:
+            logger.info("No connected services found, skipping impact analysis")
+            return {}
+        
+        # Build context for CrewAI
+        connections_text = ""
+        for service_id, interactions in connected_services.items():
+            service_name = interactions[0].get("service_name", f"Service {service_id[:8]}")
+            connections_text += f"\n\nService: {service_name} (ID: {service_id})\n"
+            connections_text += "Connections to changed service:\n"
+            for conn in interactions:
+                if conn["type"] == "incoming":
+                    connections_text += f"  - Calls changed service via {conn['connection_type']}"
+                    if conn["http_url"]:
+                        connections_text += f" (HTTP: {conn['http_method']} {conn['http_url']})"
+                    if conn["kafka_topic"]:
+                        connections_text += f" (Kafka: topic '{conn['kafka_topic']}')"
+                    connections_text += "\n"
+                elif conn["type"] == "outgoing":
+                    connections_text += f"  - Called by changed service via {conn['connection_type']}"
+                    if conn["http_url"]:
+                        connections_text += f" (HTTP: {conn['http_method']} {conn['http_url']})"
+                    if conn["kafka_topic"]:
+                        connections_text += f" (Kafka: topic '{conn['kafka_topic']}')"
+                    connections_text += "\n"
+        
+        task_description = f"""
+Analyze the following code change and determine which dependent services will be HARMED (break, fail, or require updates):
+
+Change Description: {change_description}
+
+Changed Service(s): {', '.join(changed_service_names)}
+
+Previous Analysis:
+{analysis_context}
+
+Connected Services (from interactions table):
+{connections_text}
+
+Your task:
+For EACH connected service listed above, determine if the change will HARM it based on:
+1. The type of change being made (API changes, endpoint changes, Kafka topic changes, etc.)
+2. How the connected service interacts with the changed service (HTTP endpoint, Kafka topic, etc.)
+3. Whether the connection between them will be affected by the change
+
+For example:
+- If payment-service API interface is changed → services calling payment-service via HTTP will be HARMED
+- If a Kafka topic message format changes → services consuming that topic will be HARMED
+- If payment-service just adds a new optional field → services may NOT be harmed (backward compatible)
+- If payment-service changes from Stripe to PayPal → services calling payment endpoints WILL be HARMED
+
+For each connected service, respond with:
+Service ID: <service_id>
+Will be harmed: YES or NO
+Reason: <brief explanation>
+
+IMPORTANT:
+- Only mark services as "YES" if they will actually BREAK or REQUIRE UPDATES due to this change
+- If the change is backward compatible or doesn't affect the connection, mark as "NO"
+- Be specific about why each service will or won't be harmed based on the connection details provided
+"""
+        
+        task = Task(
+            description=task_description,
+            agent=self.agent,
+        )
+        
+        try:
+            def run_crew():
+                crew = Crew(
+                    agents=[self.agent],
+                    tasks=[task],
+                    verbose=True,
+                )
+                return crew.kickoff()
+            
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor() as executor:
+                result_crew = await loop.run_in_executor(executor, run_crew)
+            
+            analysis_text = str(result_crew) if result_crew else ""
+            logger.info(f"CrewAI impact analysis result: {analysis_text[:500]}...")
+            
+            # Parse the analysis to extract which services will be harmed
+            impact_map = {}
+            
+            # Try multiple parsing patterns
+            for service_id in connected_services.keys():
+                service_name = connected_services[service_id][0].get("service_name", f"Service {service_id[:8]}")
+                will_be_harmed = None
+                
+                # Pattern 1: "Service ID: <id>" or "Service: <name> (ID: <id>)" followed by "Will be harmed: YES/NO"
+                escaped_service_id = re.escape(service_id)
+                escaped_service_name = re.escape(service_name)
+                escaped_service_id_short = re.escape(service_id[:8])
+                
+                patterns = [
+                    f'(?:Service\\s+ID|ID):\\s*{escaped_service_id}.*?Will\\s+be\\s+harmed:\\s*(YES|NO)',
+                    f'Service:\\s*{escaped_service_name}.*?\\(ID:\\s*{escaped_service_id}.*?Will\\s+be\\s+harmed:\\s*(YES|NO)',
+                    f'{escaped_service_name}.*?Will\\s+be\\s+harmed:\\s*(YES|NO)',
+                    f'{escaped_service_id_short}.*?Will\\s+be\\s+harmed:\\s*(YES|NO)',
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, analysis_text, re.IGNORECASE | re.DOTALL)
+                    if match:
+                        will_be_harmed = match.group(1).upper() == "YES"
+                        logger.info(f"✅ Service {service_name} ({service_id[:8]}): Will be harmed = {will_be_harmed}")
+                        break
+                
+                if will_be_harmed is None:
+                    # Try to find if service is mentioned with "YES" or "NO" nearby
+                    service_mention_pattern = f'{escaped_service_id_short}|{escaped_service_name}'
+                    service_mentions = list(re.finditer(service_mention_pattern, analysis_text, re.IGNORECASE))
+                    for mention in service_mentions:
+                        # Look for YES/NO within 200 chars after the mention
+                        context = analysis_text[mention.end():mention.end()+200]
+                        if re.search(r'harmed:\s*(YES|NO)', context, re.IGNORECASE):
+                            yes_match = re.search(r'harmed:\s*(YES)', context, re.IGNORECASE)
+                            no_match = re.search(r'harmed:\s*(NO)', context, re.IGNORECASE)
+                            if yes_match and (not no_match or yes_match.start() < no_match.start()):
+                                will_be_harmed = True
+                                logger.info(f"✅ Service {service_name} ({service_id[:8]}): Will be harmed = YES (found in context)")
+                                break
+                            elif no_match:
+                                will_be_harmed = False
+                                logger.info(f"✅ Service {service_name} ({service_id[:8]}): Will be harmed = NO (found in context)")
+                                break
+                
+                if will_be_harmed is None:
+                    # Default to YES if we can't determine (conservative approach - assume they will be harmed)
+                    impact_map[service_id] = True
+                    logger.warning(f"⚠️ Could not determine impact for service {service_name} ({service_id[:8]}), defaulting to harmed=True (conservative)")
+                else:
+                    impact_map[service_id] = will_be_harmed
+            
+            return impact_map
+        except Exception as e:
+            logger.error(f"Error analyzing impact with CrewAI: {e}", exc_info=True)
+            # Default to all services being harmed if analysis fails (conservative approach)
+            return {service_id: True for service_id in connected_services.keys()}
+    
+    async def _find_impacted_connections_from_db(
+        self,
+        changed_service: Service,
+        impact_analysis: Dict[str, bool],
+        blast_radius_nodes: Set[str],
+        blast_radius_edges: List[Dict],
+        blast_radius_details: Dict[str, Dict],
+    ):
+        """Find services that will be harmed by the change based on impact analysis"""
+        changed_service_id = str(changed_service.id)
+        
+        # Find incoming connections (services that call the changed service)
+        result = await self.db_session.execute(
+            select(Interaction).where(Interaction.target_service_id == uuid.UUID(changed_service_id))
+        )
+        interactions = result.scalars().all()
+        
+        logger.info(f"Found {len(interactions)} incoming connections for {changed_service.name}")
+        
+        for interaction in interactions:
+            caller_id = str(interaction.source_service_id)
+            
+            # Only include if impact analysis says this service will be harmed
+            if impact_analysis.get(caller_id, True):  # Default to True if not in analysis
+                blast_radius_nodes.add(caller_id)
+                blast_radius_edges.append({
+                    "source": caller_id,
+                    "target": changed_service_id,
+                    "type": interaction.edge_type.value,
+                })
+                if caller_id not in blast_radius_details:
+                    blast_radius_details[caller_id] = {
+                        "type": interaction.edge_type.value,
+                        "url": interaction.http_url,
+                        "topic": interaction.kafka_topic,
+                        "reason": f"Calls changed service {changed_service.name} via {interaction.edge_type.value} and will be impacted by the change",
+                    }
+                    if interaction.http_url:
+                        blast_radius_details[caller_id]["url"] = interaction.http_url
+                    if interaction.kafka_topic:
+                        blast_radius_details[caller_id]["topic"] = interaction.kafka_topic
+        
+        # Also check outgoing connections (what changed service calls)
+        result = await self.db_session.execute(
+            select(Interaction).where(Interaction.source_service_id == uuid.UUID(changed_service_id))
+        )
+        interactions = result.scalars().all()
+        
+        logger.info(f"Found {len(interactions)} outgoing connections for {changed_service.name}")
+        
+        for interaction in interactions:
+            target_id = str(interaction.target_service_id)
+            
+            # Only include if impact analysis says this service will be harmed
+            if impact_analysis.get(target_id, True):  # Default to True if not in analysis
+                blast_radius_nodes.add(target_id)
+                blast_radius_edges.append({
+                    "source": changed_service_id,
+                    "target": target_id,
+                    "type": interaction.edge_type.value,
+                })
+                if target_id not in blast_radius_details:
+                    blast_radius_details[target_id] = {
+                        "type": interaction.edge_type.value,
+                        "url": interaction.http_url,
+                        "topic": interaction.kafka_topic,
+                        "reason": f"Changed service {changed_service.name} calls it via {interaction.edge_type.value} and this service will be impacted by the change",
+                    }
+                    if interaction.http_url:
+                        blast_radius_details[target_id]["url"] = interaction.http_url
+                    if interaction.kafka_topic:
+                        blast_radius_details[target_id]["topic"] = interaction.kafka_topic
     
     async def _find_incoming_connections_from_db(
         self,
@@ -680,19 +1050,20 @@ class WhatIfAgent:
         task_description += """
         
         From this change, identify:
-        1. What services are being changed? (Service names - be specific and exact)
+        1. What services are being changed? (Service names - be specific and exact - ONLY the services directly mentioned as being modified)
         2. What type of changes are being made? (API changes, database changes, configuration changes, etc.)
         3. Why are these services affected? (Explain the connection to the change)
         4. What is the potential impact? (Breaking changes, new features, bug fixes, etc.)
         
-        IMPORTANT:
-        - Extract the exact service names being changed (e.g., "user-service", "payment-service", "applens-cart-service")
+        CRITICAL INSTRUCTIONS:
+        - Extract ONLY the exact service names that are BEING CHANGED (e.g., if the change says "update payment-service", then ONLY extract "payment-service")
+        - DO NOT include services that are only mentioned as dependencies or will be affected by the change
+        - If the change description mentions "update payment-service" or "change payment-service", then the answer to question 1 should be ONLY "payment-service" (not other services)
         - Identify any HTTP endpoints being modified
         - Identify any Kafka topics being changed
-        - Focus on services that are directly mentioned or clearly connected to the change
-        - Be specific about why each service is affected
+        - Focus ONLY on services that are directly being modified in this change, not services that depend on them
         
-        Format your response with clear sections explaining what services are affected and why.
+        Format your response with clear sections. For question 1, list ONLY the service(s) that are being directly changed.
         """
         
         task = Task(
@@ -782,28 +1153,64 @@ class WhatIfAgent:
             return None
     
     def _extract_changed_services_from_analysis(self, analysis_text: str, change_description: str) -> List[str]:
-        """Extract changed service names from CrewAI analysis"""
-        patterns = [
-            r'services? being changed[:\s]+(?:is\s+)?(?:the\s+)?["\']?([a-z-]+(?:-service)?)["\']?',
-            r'changed services?[:\s]+(?:is\s+)?(?:the\s+)?["\']?([a-z-]+(?:-service)?)["\']?',
-            r'service[:\s]+(?:is\s+)?(?:the\s+)?["\']?([a-z-]+(?:-service)?)["\']?',
-            r'["\']([a-z-]+(?:-service)?)["\']',
-            r'([a-z-]+(?:-service)?)',
+        """Extract changed service names from CrewAI analysis - prioritize services explicitly mentioned as being changed"""
+        services = set()
+        
+        # Priority 1: Look for explicit "being changed" or "changed service" patterns
+        # These patterns target the section that explicitly lists changed services
+        explicit_patterns = [
+            r'(?:services? being changed|changed services?|service being modified|service being updated)[:\s]*\n\s*[-•]\s*service name[:\s]*["\']?([a-z-]+(?:-service)?)["\']?',
+            r'(?:services? being changed|changed services?)[:\s]*\n\s*[-•]\s*["\']?([a-z-]+(?:-service)?)["\']?',
+            r'(?:services? being changed|changed services?)[:\s]+["\']?([a-z-]+(?:-service)?)["\']?',
+            r'(?:^|\n)\s*1\.\s*.*?services?.*?changed[:\s]*\n.*?[-•]\s*["\']?([a-z-]+(?:-service)?)["\']?',
         ]
         
-        services = set()
-        for pattern in patterns:
-            matches = re.findall(pattern, analysis_text, re.IGNORECASE)
+        for pattern in explicit_patterns:
+            matches = re.findall(pattern, analysis_text, re.IGNORECASE | re.MULTILINE)
             for match in matches:
                 if isinstance(match, tuple):
                     match = match[0] if match[0] else match[-1]
-                # Filter out common false positives
                 if match and match not in ['the', 'is', 'are', 'being', 'changed', 'service']:
                     services.add(match.lower())
         
-        logger.info(f"Extracted services from analysis: {services}")
+        # Priority 2: Look for services in section 1 or explicitly marked as changed
+        section1_pattern = r'(?:^|\n)\s*(?:1\.|##)\s*.*?services?.*?changed.*?\n(.*?)(?:\n\s*(?:2\.|##)|\Z)'
+        section1_match = re.search(section1_pattern, analysis_text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        if section1_match:
+            section1_text = section1_match.group(1)
+            # Extract service names from this section
+            service_patterns = [
+                r'["\']([a-z-]+(?:-service)?)["\']',
+                r'`([a-z-]+(?:-service)?)`',
+                r'\b([a-z-]+-service)\b',
+            ]
+            for pattern in service_patterns:
+                matches = re.findall(pattern, section1_text, re.IGNORECASE)
+                for match in matches:
+                    if isinstance(match, tuple):
+                        match = match[0] if match[0] else match[-1]
+                    if match and match not in ['the', 'is', 'are', 'being', 'changed', 'service']:
+                        services.add(match.lower())
         
-        # Fallback to change description
+        # Priority 3: Fallback to general patterns (but filter more strictly)
+        if not services:
+            general_patterns = [
+                r'services? being changed[:\s]+(?:is\s+)?(?:the\s+)?["\']?([a-z-]+(?:-service)?)["\']?',
+                r'changed services?[:\s]+(?:is\s+)?(?:the\s+)?["\']?([a-z-]+(?:-service)?)["\']?',
+            ]
+            for pattern in general_patterns:
+                matches = re.findall(pattern, analysis_text, re.IGNORECASE)
+                for match in matches:
+                    if isinstance(match, tuple):
+                        match = match[0] if match[0] else match[-1]
+                    if match and match not in ['the', 'is', 'are', 'being', 'changed', 'service']:
+                        # Only add if it's also mentioned in the change description
+                        if any(keyword in change_description.lower() for keyword in [match.lower(), f"update {match.lower()}", f"change {match.lower()}", f"modify {match.lower()}"]):
+                            services.add(match.lower())
+        
+        logger.info(f"Extracted services from analysis (filtered): {services}")
+        
+        # Final fallback to change description if nothing found
         if not services:
             services = set(self._extract_service_names(change_description))
             logger.info(f"Fallback: Extracted services from description: {services}")
@@ -811,20 +1218,40 @@ class WhatIfAgent:
         return list(services)
     
     def _extract_service_names(self, text: str) -> List[str]:
-        """Extract service names from text"""
-        patterns = [
-            r'([a-z]+(?:-[a-z]+)+-service)',
-            r'([a-z]+_service)',
-            r'(service[:\s]+([a-z-]+))',
-        ]
+        """Extract service names from text - prioritize services mentioned with action verbs"""
         names = set()
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                if isinstance(match, tuple):
-                    names.add(match[-1] if match[-1] else match[0])
-                else:
-                    names.add(match)
+        
+        # Priority 1: Services mentioned with action verbs (update, change, modify, etc.)
+        action_verbs = r'(?:update|change|modify|alter|switch|migrate|refactor)\s+([a-z-]+(?:-service)?)'
+        matches = re.findall(action_verbs, text, re.IGNORECASE)
+        for match in matches:
+            if match and match not in ['the', 'is', 'are', 'being', 'changed', 'service']:
+                names.add(match.lower())
+        
+        # Priority 2: Services in quotes or backticks (more explicit)
+        quoted_pattern = r'["\'`]([a-z-]+(?:-service)?)["\'`]'
+        matches = re.findall(quoted_pattern, text, re.IGNORECASE)
+        for match in matches:
+            if match and match not in ['the', 'is', 'are', 'being', 'changed', 'service']:
+                names.add(match.lower())
+        
+        # Priority 3: Services matching pattern (if not already found)
+        if not names:
+            patterns = [
+                r'\b([a-z-]+(?:-service)?)\b',  # Match any service pattern
+                r'([a-z]+_service)',
+            ]
+            for pattern in patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    if isinstance(match, tuple):
+                        match = match[-1] if match[-1] else match[0]
+                    if match and match not in ['the', 'is', 'are', 'being', 'changed', 'service']:
+                        # Filter out common words that might match the pattern
+                        common_words = {'this', 'that', 'which', 'where', 'when', 'what', 'how', 'who', 'why'}
+                        if match.lower() not in common_words:
+                            names.add(match.lower())
+        
         return list(names)
     
     def _format_url(self, url: str, max_length: int = 45) -> str:
@@ -920,13 +1347,19 @@ Changed Services (BLUE Nodes - Primary):
 
 These services are marked BLUE because they are being modified by the change (primary nodes).
 
-Blast Radius (RED Nodes - Directly Affected):
-Total: {len(blast_radius_service_names)} service(s) in blast radius
+Blast Radius (RED Nodes - Services That Will Be Harmed):
+Total: {len(blast_radius_service_names)} service(s) will be harmed by this change
 
 Services:
-{chr(10).join([f"  - {name}" for name in blast_radius_service_names]) if blast_radius_service_names else "  - None found - No services are directly affected by this change."}
+{chr(10).join([f"  - {name}" for name in blast_radius_service_names]) if blast_radius_service_names else "  - None found - No services will be harmed by this change."}
 
-These services are marked RED because they are directly affected by the changes (they depend on changed services or changed services depend on them).
+These services are marked RED because they will be HARMED by the change - they will break, fail, or require updates due to:
+- API interface changes affecting their HTTP calls to the changed service
+- Kafka topic or message format changes affecting their event consumption
+- Breaking changes in endpoints or data structures they depend on
+- Changes that affect the connection between them and the changed service
+
+Only services that will actually be impacted (not backward compatible changes) are included in the blast radius.
 
 Risk Hotspots (RED Nodes - High Risk):
 Total: {len(risk_hotspot_service_names)} service(s) identified as risk hotspots
