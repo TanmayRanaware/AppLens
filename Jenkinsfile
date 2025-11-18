@@ -1,6 +1,7 @@
 pipeline {
   agent any
 
+  // CI/CD pipeline for AppLens
   options {
     timestamps()
     ansiColor('xterm')
