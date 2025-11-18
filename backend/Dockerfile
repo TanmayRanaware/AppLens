@@ -12,10 +12,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/root/.local/bin:${PATH}"
 
-# Safe, cached apt across multi-arch (separate caches per arch) + lock cleanup
-RUN --mount=type=cache,id=apt-lists-${TARGETARCH},target=/var/lib/apt/lists \
-    --mount=type=cache,id=apt-cache-${TARGETARCH},target=/var/cache/apt \
-    rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock-frontend \
+# Faster apt + clean
+# Note: Removed cache mounts to avoid lock conflicts when building for multiple platforms in parallel
+RUN rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock-frontend \
  && apt-get update -y \
  && apt-get install -y --no-install-recommends build-essential curl \
  && rm -rf /var/lib/apt/lists/*
