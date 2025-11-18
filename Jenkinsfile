@@ -19,7 +19,9 @@ pipeline {
     // Buildx / BuildKit
     DOCKER_BUILDKIT         = '1'
     DOCKER_CLI_EXPERIMENTAL = 'enabled'
-    PLATFORMS               = 'linux/amd64,linux/arm64'   // <-- multi-arch manifest
+    PLATFORMS               = 'linux/amd64,linux/arm64'      // default multi-arch
+    FRONTEND_PLATFORMS      = 'linux/amd64'                  // 👈 force single-arch for frontend
+    BACKEND_PLATFORMS       = "${PLATFORMS}"                 // keep backend multi-arch
 
     // Next.js build args (Dockerfile uses them)
     NEXT_IGNORE_LINT        = '1'
@@ -48,14 +50,23 @@ pipeline {
       steps {
         sh '''
           set -euxo pipefail
+
           docker context use default || true
-          docker buildx create --use || true
+
+          # Recreate a tuned builder to reduce parallelism (helps memory)
+          docker buildx rm ci-builder || true
+          docker buildx create \
+            --name ci-builder \
+            --driver docker-container \
+            --driver-opt env.BUILDKIT_MAX_PARALLELISM=2 \
+            --use
+
           docker buildx inspect --bootstrap
         '''
       }
     }
 
-    stage('Build & Push Images (multi-arch)') {
+    stage('Build & Push Images') {
       options { timeout(time: 40, unit: 'MINUTES') }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
@@ -66,18 +77,19 @@ pipeline {
 
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin "$REGISTRY"
 
-            docker buildx create --use || true
+            # ensure the tuned builder is active
+            docker buildx use ci-builder
             docker buildx inspect --bootstrap
 
             retry_build_push() {
-              local image="$1" tag="$2" dockerfile="$3" context="$4"
+              local image="$1" tag="$2" dockerfile="$3" context="$4" platforms="$5"
               local attempts=5 delay=8 rc=0
 
               for ((i=1; i<=attempts; i++)); do
-                echo "Attempt $i/$attempts: building & pushing ${image}:${tag}"
+                echo "Attempt $i/$attempts: building & pushing ${image}:${tag} (platforms=${platforms})"
                 set +e
                 docker buildx build \
-                  --platform "${PLATFORMS}" \
+                  --platform "${platforms}" \
                   --build-arg NEXT_IGNORE_LINT="${NEXT_IGNORE_LINT}" \
                   --build-arg NEXT_IGNORE_TSC="${NEXT_IGNORE_TSC}" \
                   --build-arg NODE_OPTIONS="${NODE_OPTIONS_BUILD}" \
@@ -107,11 +119,11 @@ pipeline {
               return 1
             }
 
-            echo "Building and pushing FRONTEND (multi-arch: ${PLATFORMS})..."
-            retry_build_push "${FRONTEND_IMAGE}" "${TAG}" "frontend/Dockerfile" "frontend"
+            echo "Building and pushing FRONTEND (platforms: ${FRONTEND_PLATFORMS})..."
+            retry_build_push "${FRONTEND_IMAGE}" "${TAG}" "frontend/Dockerfile" "frontend" "${FRONTEND_PLATFORMS}"
 
-            echo "Building and pushing BACKEND (multi-arch: ${PLATFORMS})..."
-            retry_build_push "${BACKEND_IMAGE}" "${TAG}" "backend/Dockerfile" "backend"
+            echo "Building and pushing BACKEND (platforms: ${BACKEND_PLATFORMS})..."
+            retry_build_push "${BACKEND_IMAGE}" "${TAG}" "backend/Dockerfile" "backend" "${BACKEND_PLATFORMS}"
           '''
         }
       }
