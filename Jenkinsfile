@@ -9,24 +9,24 @@ pipeline {
   }
 
   environment {
-    REGISTRY                = 'docker.io'
-    FRONTEND_IMAGE          = 'tanmayranaware/applens-frontend'
-    BACKEND_IMAGE           = 'tanmayranaware/applens-backend'
-    EC2_HOST                = 'ubuntu@ec2-3-21-127-72.us-east-2.compute.amazonaws.com'
-
-    TAG                     = "${env.BRANCH_NAME ?: 'main'}-${env.BUILD_NUMBER}"
+    REGISTRY           = 'docker.io'
+    FRONTEND_IMAGE     = 'tanmayranaware/applens-frontend'
+    BACKEND_IMAGE      = 'tanmayranaware/applens-backend'
+    EC2_HOST           = 'ubuntu@ec2-3-21-127-72.us-east-2.compute.amazonaws.com'
+    TAG                = "${env.BRANCH_NAME ?: 'main'}-${env.BUILD_NUMBER}"
 
     // Buildx / BuildKit
     DOCKER_BUILDKIT         = '1'
     DOCKER_CLI_EXPERIMENTAL = 'enabled'
-    PLATFORMS               = 'linux/amd64,linux/arm64'      // default multi-arch
-    FRONTEND_PLATFORMS      = 'linux/amd64'                  // 👈 force single-arch for frontend
-    BACKEND_PLATFORMS       = "${PLATFORMS}"                 // keep backend multi-arch
+    PLATFORMS               = 'linux/amd64,linux/arm64' // default multi-arch
+    FRONTEND_PLATFORMS      = 'linux/amd64'             // keep frontend single-arch
+    BACKEND_PLATFORMS       = "${PLATFORMS}"
 
-    // Next.js build args (Dockerfile uses them)
-    NEXT_IGNORE_LINT        = '1'
-    NEXT_IGNORE_TSC         = '1'
-    NODE_OPTIONS_BUILD      = '--max-old-space-size=2048'
+    // Next.js build args (consumed by Dockerfile & next.config.mjs)
+    NEXT_IGNORE_LINT   = '1'
+    NEXT_IGNORE_TSC    = '1'
+    // give Node more headroom during build
+    NODE_OPTIONS_BUILD = '--max-old-space-size=3072'
   }
 
   stages {
@@ -50,10 +50,9 @@ pipeline {
       steps {
         sh '''
           set -euxo pipefail
-
           docker context use default || true
 
-          # Recreate a tuned builder to reduce parallelism (helps memory)
+          # Recreate a tuned builder (lower parallelism -> lower RAM)
           docker buildx rm ci-builder || true
           docker buildx create \
             --name ci-builder \
@@ -77,14 +76,12 @@ pipeline {
 
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin "$REGISTRY"
 
-            # ensure the tuned builder is active
             docker buildx use ci-builder
             docker buildx inspect --bootstrap
 
             retry_build_push() {
               local image="$1" tag="$2" dockerfile="$3" context="$4" platforms="$5"
               local attempts=5 delay=8 rc=0
-
               for ((i=1; i<=attempts; i++)); do
                 echo "Attempt $i/$attempts: building & pushing ${image}:${tag} (platforms=${platforms})"
                 set +e
@@ -100,21 +97,17 @@ pipeline {
                   --provenance=false \
                   --sbom=false \
                   --progress=plain
-                rc=$?
-                set -e
-
+                rc=$?; set -e
                 if [ $rc -eq 0 ]; then
                   echo "✅ Successfully pushed ${image}:${tag}"
                   return 0
                 fi
-
                 if [ $i -lt $attempts ]; then
                   echo "⚠️ Push failed (rc=$rc). Retrying in ${delay}s..."
                   sleep "$delay"
                   delay=$(( delay*2 > 60 ? 60 : delay*2 ))
                 fi
               done
-
               echo "❌ Failed to push ${image}:${tag} after ${attempts} attempts"
               return 1
             }
@@ -140,23 +133,15 @@ pipeline {
               set -euxo pipefail
               ssh -o StrictHostKeyChecking=no ${EC2_HOST} '
                 set -euxo pipefail
-
-                # Login on the host (compose will pull)
                 echo "${DOCKERHUB_PASS}" | docker login -u "${DOCKERHUB_USER}" --password-stdin ${REGISTRY} || true
-
                 cd /srv/app
-
-                # Persist the image tag for compose
                 if grep -q "^TAG=" .env.prod; then
                   sed -i "s/^TAG=.*/TAG=${TAG}/" .env.prod
                 else
                   echo "TAG=${TAG}" >> .env.prod
                 fi
-
-                # Pull + recreate with the new tag
                 docker compose -f docker-compose.prod.yml --env-file .env.prod pull
                 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
-
                 docker compose -f docker-compose.prod.yml --env-file .env.prod ps
               '
             """
