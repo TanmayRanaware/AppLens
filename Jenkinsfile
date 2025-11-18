@@ -5,8 +5,7 @@ pipeline {
     timestamps()
     ansiColor('xterm')
     buildDiscarder(logRotator(numToKeepStr: '20'))
-    // Global safety timeout (can be overridden per-stage)
-    timeout(time: 60, unit: 'MINUTES')
+    timeout(time: 60, unit: 'MINUTES') // global safety timeout
   }
 
   environment {
@@ -17,6 +16,11 @@ pipeline {
     TAG                     = "${env.BRANCH_NAME ?: 'main'}-${env.BUILD_NUMBER}"
     DOCKER_BUILDKIT         = '1'
     DOCKER_CLI_EXPERIMENTAL = 'enabled'
+
+    // Build args consumed by your Dockerfile (see notes below)
+    NEXT_IGNORE_LINT        = '1'
+    NEXT_IGNORE_TSC         = '1'
+    NODE_OPTIONS_BUILD      = '--max-old-space-size=2048'
   }
 
   stages {
@@ -31,7 +35,7 @@ pipeline {
           docker version || true
           docker buildx version || true
           docker context ls || true
-          docker info | sed -n '1,40p' || true
+          docker info | sed -n '1,60p' || true
         '''
       }
     }
@@ -47,11 +51,8 @@ pipeline {
       }
     }
 
-    stage('Build & Push Images (amd64)') {
-      options {
-        // Keep this tighter so pushes don't hang forever
-        timeout(time: 40, unit: 'MINUTES')
-      }
+    stage('Build & Push Images') {
+      options { timeout(time: 40, unit: 'MINUTES') }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
                                           usernameVariable: 'DOCKERHUB_USER',
@@ -59,14 +60,22 @@ pipeline {
           sh '''
             set -euxo pipefail
 
-            # Login (registry optional here since it's docker.io)
+            # Login (registry optional for docker.io)
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin "$REGISTRY"
 
             # Ensure buildx builder is ready
             docker buildx create --use || true
             docker buildx inspect --bootstrap
 
-            # Retryable build+push helper
+            # Auto-select platform to avoid QEMU when running on Apple Silicon agents
+            # arm64 host -> build linux/arm64; otherwise linux/amd64
+            if uname -m | grep -qi 'arm\\|aarch64'; then
+              export TARGET_PLATFORM=linux/arm64
+            else
+              export TARGET_PLATFORM=linux/amd64
+            fi
+            echo "Using buildx --platform=${TARGET_PLATFORM}"
+
             retry_build_push() {
               local image="$1" tag="$2" dockerfile="$3" context="$4"
               local attempts=5 delay=8 rc=0
@@ -75,7 +84,10 @@ pipeline {
                 echo "Attempt $i/$attempts: building & pushing ${image}:${tag}"
                 set +e
                 docker buildx build \
-                  --platform linux/amd64 \
+                  --platform "${TARGET_PLATFORM}" \
+                  --build-arg NEXT_IGNORE_LINT="${NEXT_IGNORE_LINT}" \
+                  --build-arg NEXT_IGNORE_TSC="${NEXT_IGNORE_TSC}" \
+                  --build-arg NODE_OPTIONS="${NODE_OPTIONS_BUILD}" \
                   -t "${image}:${tag}" \
                   -t "${image}:latest" \
                   -f "${dockerfile}" "${context}" \
@@ -113,11 +125,8 @@ pipeline {
       }
     }
 
-    // Always deploy after build & push
     stage('Deploy to EC2') {
-      options {
-        timeout(time: 20, unit: 'MINUTES')
-      }
+      options { timeout(time: 20, unit: 'MINUTES') }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
                                           usernameVariable: 'DOCKERHUB_USER',
