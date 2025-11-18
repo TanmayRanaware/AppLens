@@ -13,6 +13,16 @@ const nextConfig = {
     },
   },
   swcMinify: true,
+  // Optimize memory usage during build
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production' ? {
+      exclude: ['error', 'warn'],
+    } : false,
+  },
+  // Reduce memory usage during static generation
+  generateBuildId: async () => {
+    return 'build-' + Date.now();
+  },
 };
 
 module.exports = nextConfig;

@@ -23,9 +23,10 @@ pipeline {
     BACKEND_PLATFORMS       = "${PLATFORMS}"
 
     // Next.js build args (consumed by Dockerfile & next.config.js)
+    // Reduced from 4096MB to 2048MB to avoid OOM in Docker buildx containers
     NEXT_IGNORE_LINT   = '1'
     NEXT_IGNORE_TSC    = '1'
-    NODE_OPTIONS_BUILD = '--max-old-space-size=4096'
+    NODE_OPTIONS_BUILD = '--max-old-space-size=2048'
 
     // *** Critical caps to prevent OOM during page-data collection ***
     NEXT_CPU_COUNT     = '1'

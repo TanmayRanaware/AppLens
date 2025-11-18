@@ -18,7 +18,7 @@
     # Build-time knobs from CI
     ARG NEXT_IGNORE_LINT=1
     ARG NEXT_IGNORE_TSC=1
-    ARG NODE_OPTIONS="--max-old-space-size=4096"
+    ARG NODE_OPTIONS="--max-old-space-size=2048"
     
     # Apply envs
     ENV NEXT_IGNORE_LINT=$NEXT_IGNORE_LINT
@@ -38,7 +38,8 @@
     RUN node -e "console.log('BUILD_ENV', {NEXT_IGNORE_LINT:process.env.NEXT_IGNORE_LINT,NEXT_IGNORE_TSC:process.env.NEXT_IGNORE_TSC,NODE_OPTIONS:process.env.NODE_OPTIONS,NEXT_CPU_COUNT:process.env.NEXT_CPU_COUNT,SWC_NODE_THREADS:process.env.SWC_NODE_THREADS,RAYON_NUM_THREADS:process.env.RAYON_NUM_THREADS})"
     
     # IMPORTANT: invoke next via node to ensure heap flag sticks
-    RUN node --max-old-space-size=4096 node_modules/next/dist/bin/next build
+    # Reduced memory from 4096MB to 2048MB to avoid OOM in CI
+    RUN node --max-old-space-size=2048 node_modules/next/dist/bin/next build
     
     # ---------- Runner ----------
     FROM base AS runner
