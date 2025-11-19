@@ -24,12 +24,14 @@ pgvector = "^0.2.4"
 psycopg2-binary = "^2.9.9"
 python-dotenv = "^1.0.0"
 greenlet = "^3.2.4"
+aiosqlite = "^0.21.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"
 pytest-asyncio = "^0.21.1"
 black = "^23.11.0"
 ruff = "^0.1.6"
+pytest-cov = "^7.0.0"
 
 [build-system]
 requires = ["poetry-core"]

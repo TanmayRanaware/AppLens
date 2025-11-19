@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
-from app.routes import auth, repos, scan, graph, chat, nlq
+from app.routes import auth, repos, scan, graph, chat, nlq, coverage
 from app.db.base import engine, Base
 import logging
 import sys

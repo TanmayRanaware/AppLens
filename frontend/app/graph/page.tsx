@@ -234,31 +234,58 @@ export default function GraphPage() {
     <div className="h-screen flex overflow-hidden" style={{ background: '#000000', width: '100vw', position: 'relative' }}>
       {/* Graph Section - Left (75%) */}
       <div className="relative" style={{ width: '75%', height: '100vh', flex: '0 0 75%', overflow: 'hidden' }}>
-        {/* Refresh Button - Top Right */}
-        <button
-          onClick={handleRefresh}
-          className="absolute top-4 right-4 z-50 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg shadow-lg transition-all duration-200 flex items-center gap-2 border border-slate-500 hover:border-slate-400"
-          title="Refresh graph to default state (clear highlights and selections)"
-        >
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            width="18" 
-            height="18" 
-            viewBox="0 0 24 24" 
-            fill="none" 
-            stroke="currentColor" 
-            strokeWidth="2" 
-            strokeLinecap="round" 
-            strokeLinejoin="round"
-            className="inline-block"
+        {/* Control Buttons - Top Right */}
+        <div className="absolute top-4 right-4 z-50 flex gap-2">
+          {/* Back to Dashboard Button */}
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg shadow-lg transition-all duration-200 flex items-center gap-2 border border-slate-500 hover:border-slate-400"
+            title="Back to Dashboard"
           >
-            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-            <path d="M21 3v5h-5" />
-            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-            <path d="M3 21v-5h5" />
-          </svg>
-          <span className="text-sm font-medium">Refresh</span>
-        </button>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="inline-block"
+            >
+              <path d="M19 12H5" />
+              <path d="M12 19l-7-7 7-7" />
+            </svg>
+            <span className="text-sm font-medium">Dashboard</span>
+          </button>
+          
+          {/* Refresh Button */}
+          <button
+            onClick={handleRefresh}
+            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg shadow-lg transition-all duration-200 flex items-center gap-2 border border-slate-500 hover:border-slate-400"
+            title="Refresh graph to default state (clear highlights and selections)"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="inline-block"
+            >
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+              <path d="M3 21v-5h5" />
+            </svg>
+            <span className="text-sm font-medium">Refresh</span>
+          </button>
+        </div>
         
         <Graph3D
           key={refreshKey}
