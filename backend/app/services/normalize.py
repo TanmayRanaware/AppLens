@@ -97,7 +97,7 @@ class NormalizeService:
             return path_service
         
         # Fallback
-        return "unknown-service"
+        return "{service_name}"
     
     def deduplicate_interactions(self, interactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Deduplicate interactions based on source, target, and type"""
@@ -128,3 +128,4 @@ class NormalizeService:
         normalized = re.sub(r'^(service-|svc-)', '', normalized)
         normalized = re.sub(r'(-service|-svc)$', '', normalized)
         return normalized
+

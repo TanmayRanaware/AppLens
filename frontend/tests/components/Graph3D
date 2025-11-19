@@ -1,0 +1,68 @@
+/// <reference types="vitest" />
+import React from 'react'
+import { render, screen, waitFor } from '@testing-library/react'
+import { vi } from 'vitest'
+
+// Mock the API module used by Graph3D
+vi.mock('next/dynamic', () => ({
+  default: (importFunc: any) => {
+    const Component = importFunc()
+    return React.forwardRef((props: any, ref: any) => {
+      return React.createElement(Component.default, { ...props, ref })
+    })
+  }
+}))
+
+vi.mock('react-force-graph-3d', () => ({
+  __esModule: true,
+  default: React.forwardRef<any, any>((props: any, ref: any) => (
+    <div data-testid="force-graph-3d" {...props} ref={ref}>
+      Force Graph 3D Component
+    </div>
+  ))
+}))
+
+vi.mock('three/examples/jsm/renderers/CSS2DRenderer.js', () => ({
+  CSS2DRenderer: vi.fn(() => ({
+    domElement: {
+      style: {
+        position: 'absolute',
+        top: '0',
+        left: '0',
+        pointerEvents: 'none'
+      }
+    }
+  })),
+  CSS2DObject: vi.fn(() => ({}))
+}))
+
+vi.mock('three', () => ({
+  __esModule: true,
+  Group: vi.fn(() => ({})),
+  Mesh: vi.fn(() => ({})),
+  SphereGeometry: vi.fn(() => ({})),
+  MeshBasicMaterial: vi.fn(() => ({
+    toneMapped: false
+  })),
+  Object3D: vi.fn(() => ({}))
+}))
+
+import Graph3D from '@/components/Graph3D'
+
+describe('Graph3D', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  it('renders without crashing', async () => {
+    const mockData = {
+      nodes: [{ id: 'node-1', name: 'Service A' }],
+      links: []
+    }
+    
+    render(<Graph3D data={mockData} />)
+    
+    await waitFor(() => expect(screen.getByTestId('force-graph-3d')).toBeInTheDocument())
+  })
+})

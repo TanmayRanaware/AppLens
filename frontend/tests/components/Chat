@@ -1,0 +1,167 @@
+/// <reference types="vitest" />
+import React from 'react'
+import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Mock external dependencies
+vi.mock('@/lib/api', () => {
+  const mockApiPost = vi.fn()
+  
+  return {
+    api: {
+      post: mockApiPost
+    }
+  }
+})
+
+vi.mock('lucide-react', () => ({
+  Send: (props: any) => <div data-testid="send-icon" {...props} />,
+  MessageSquare: (props: any) => <div data-testid="message-square-icon" {...props} />,
+  AlertTriangle: (props: any) => <div data-testid="alert-triangle-icon" {...props} />,
+  Zap: (props: any) => <div data-testid="zap-icon" {...props} />,
+  Database: (props: any) => <div data-testid="database-icon" {...props} />
+}))
+
+import ChatDock from '@/components/ChatDock'
+
+describe('ChatDock Component', () => {
+  const defaultProps = {
+    onHighlightNodes: vi.fn(),
+    onHighlightLinks: vi.fn(),
+    onSourceNode: vi.fn(),
+    onChangedNodes: vi.fn(),
+    messages: [] as Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }>,
+    setMessages: vi.fn()
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders ChatDock component', () => {
+    render(<ChatDock {...defaultProps} />)
+    
+    expect(screen.getByText('AppLens')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/ask me anything/i)).toBeInTheDocument()
+  })
+
+  it('switches between tool modes', async () => {
+    render(<ChatDock {...defaultProps} />)
+    
+    // Default mode should show "Ask me anything" placeholder
+    expect(screen.getByPlaceholderText(/ask me anything/i)).toBeInTheDocument()
+    
+    // Click Error Analyzer tab
+    await userEvent.click(screen.getByRole('button', { name: /error analyzer/i }))
+    expect(screen.getByPlaceholderText(/paste error log/i)).toBeInTheDocument()
+    
+    // Click What-If tab
+    await userEvent.click(screen.getByRole('button', { name: /what-if/i }))
+    expect(screen.getByPlaceholderText(/describe the change/i)).toBeInTheDocument()
+    
+    // Click Ask Me tab (nlq mode)
+    await userEvent.click(screen.getByRole('button', { name: /ask me/i }))
+    expect(screen.getByPlaceholderText(/ask me anything/i)).toBeInTheDocument()
+  })
+
+  it('displays tool descriptions correctly', async () => {
+    render(<ChatDock {...defaultProps} />)
+    
+    // Default description
+    expect(screen.getByText(/ask me anything about your microservices/i)).toBeInTheDocument()
+    
+    // Switch to Error Analyzer
+    await userEvent.click(screen.getByRole('button', { name: /error analyzer/i }))
+    expect(screen.getByText(/paste error logs to detect implicated services and edges/i)).toBeInTheDocument()
+    
+    // Switch to What-If
+    await userEvent.click(screen.getByRole('button', { name: /what-if/i }))
+    expect(screen.getByText(/describe changes to predict blast radius and risk hotspots/i)).toBeInTheDocument()
+    
+    // Switch to Ask Me (nlq)
+    await userEvent.click(screen.getByRole('button', { name: /ask me/i }))
+    expect(screen.getByText(/ask me anything about your microservices/i)).toBeInTheDocument()
+  })
+
+  it('displays messages in chat interface', () => {
+    const testMessages = [
+      {
+        role: 'user' as const,
+        content: 'Hello',
+        timestamp: '12:00'
+      },
+      {
+        role: 'assistant' as const,
+        content: 'Hi there!',
+        timestamp: '12:01'
+      }
+    ]
+    
+    render(
+      <ChatDock 
+        {...defaultProps} 
+        messages={testMessages}
+      />
+    )
+    
+    expect(screen.getByText('Hello')).toBeInTheDocument()
+    expect(screen.getByText('Hi there!')).toBeInTheDocument()
+  })
+
+  it('has interactive elements', async () => {
+    render(<ChatDock {...defaultProps} />)
+    
+    // Check if all tabs are present
+    expect(screen.getByRole('button', { name: /error analyzer/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /what-if/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /ask me/i })).toBeInTheDocument()
+    
+    // Check if input is present
+    expect(screen.getByPlaceholderText(/ask me anything/i)).toBeInTheDocument()
+    
+    // Check if send button is present
+    expect(screen.getByTestId('send-icon')).toBeInTheDocument()
+  })
+
+  it('renders header correctly', () => {
+    render(<ChatDock {...defaultProps} />)
+    
+    // Check header elements
+    expect(screen.getByText('AppLens')).toBeInTheDocument()
+    
+    // Check for the green status indicator
+    const statusIndicator = document.querySelector('.w-2.h-2.bg-green-500.rounded-full')
+    expect(statusIndicator).toBeInTheDocument()
+  })
+
+  it('handles mode switching correctly', async () => {
+    render(<ChatDock {...defaultProps} />)
+    
+    // Initially on default mode (nlq)
+    expect(screen.getByPlaceholderText(/ask me anything/i)).toBeInTheDocument()
+    
+    // Switch to error analyzer
+    await userEvent.click(screen.getByRole('button', { name: /error analyzer/i }))
+    expect(screen.getByPlaceholderText(/paste error log/i)).toBeInTheDocument()
+    
+    // Switch to what-if
+    await userEvent.click(screen.getByRole('button', { name: /what-if/i }))
+    expect(screen.getByPlaceholderText(/describe the change/i)).toBeInTheDocument()
+    
+    // Switch back to ask me
+    await userEvent.click(screen.getByRole('button', { name: /ask me/i }))
+    expect(screen.getByPlaceholderText(/ask me anything/i)).toBeInTheDocument()
+  })
+
+  it('handles empty messages gracefully', () => {
+    render(<ChatDock {...defaultProps} />)
+    
+    // Should render without messages
+    expect(screen.getByText('AppLens')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/ask me anything/i)).toBeInTheDocument()
+  })
+})
