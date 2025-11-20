@@ -91,3 +91,7 @@ When you paste an error, you get:
 <div align="center">
   <p><strong>Built for developers who've debugged one too many microservice incidents</strong></p>
 </div>
+
+---
+
+To run the app, please visit `/docs`.
