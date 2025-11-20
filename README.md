@@ -3,6 +3,8 @@
 > **Intelligent Microservice Debugging & Analysis**  
 > Automatically understand, visualize, and debug complex microservice architectures using AI-powered graph analysis.
 
+**Built for developers who've debugged one too many microservice incidents**
+
 ---
 
 ## 🔴 The Problem
@@ -88,10 +90,6 @@ When you paste an error, you get:
 
 ---
 
-<div align="center">
-  <p><strong>Built for developers who've debugged one too many microservice incidents</strong></p>
-</div>
-
----
+## Getting Started
 
 To run the app, please visit `/docs`.
